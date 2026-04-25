@@ -1,7 +1,0 @@
-target/
-
-**/.DS_Store
-**/Thumbs.db
-
-# Ignore Cargo.lock for libraries
-Cargo.lock
