@@ -1,0 +1,9 @@
+[package]
+name = "shared"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["js", "serde", "v4"] }
