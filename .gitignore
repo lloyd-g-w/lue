@@ -25,3 +25,6 @@ vite.config.ts.timestamp-*
 # Rust
 /target
 /dist
+
+#nix
+.nix-home
