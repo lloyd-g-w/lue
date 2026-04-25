@@ -6,6 +6,7 @@ version.workspace = true
 
 [dependencies]
 dioxus = { version = "0.6", features = ["web"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shared = { path = "../shared" }
 uuid = { version = "1", features = ["serde", "v4"] }
@@ -21,4 +22,3 @@ web-sys = { version = "0.3", features = [
     "WebSocket",
 ] }
 js-sys = "0.3"
-

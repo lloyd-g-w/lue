@@ -1,0 +1,21 @@
+[package]
+name = "warnings"
+version = "0.2.1"
+edition = "2021"
+authors = ["Evan Almloff <evanalmloff@gmail.com>"]
+description = "A crate for defining debug only runtime warnings with a way to opt-out"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dioxuslabs/warnings"
+homepage = "https://dioxuslabs.com" 
+
+[dependencies]
+pin-project = "1"
+tracing = "0.1.40"
+warnings-macro = { path = "./warnings-macro", version = "0.2.0" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+warnings = { path = "." }
+
+[workspace]
+members = ["./warnings-macro"]

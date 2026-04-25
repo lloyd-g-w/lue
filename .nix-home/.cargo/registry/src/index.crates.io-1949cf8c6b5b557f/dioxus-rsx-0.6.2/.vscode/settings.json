@@ -1,0 +1,4 @@
+{
+    "rust-analyzer.check.workspace": false,
+    "rust-analyzer.cargo.features": "all"
+}

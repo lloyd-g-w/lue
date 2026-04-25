@@ -11,3 +11,15 @@ edition = "2021"
 license = "MIT"
 version = "0.1.0"
 
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"
+
