@@ -37,6 +37,13 @@ pub struct AccountDraft {
     pub role: AccountRole,
 }
 
+#[derive(Clone, PartialEq)]
+pub struct GroupDraft {
+    pub name: String,
+    pub role: AccountRole,
+    pub member_ids: Vec<uuid::Uuid>,
+}
+
 impl Default for AccountDraft {
     fn default() -> Self {
         Self {
@@ -44,6 +51,16 @@ impl Default for AccountDraft {
             email: String::new(),
             password: String::new(),
             role: AccountRole::User,
+        }
+    }
+}
+
+impl Default for GroupDraft {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            role: AccountRole::Admin,
+            member_ids: Vec::new(),
         }
     }
 }

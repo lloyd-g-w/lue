@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use dioxus::prelude::*;
 use serde_json::from_str;
 use shared::{AdminIdentityView, ClientMessage, ServerMessage, UserIdentityView};
@@ -6,6 +9,14 @@ use wasm_bindgen::JsCast;
 use web_sys::{window, MessageEvent, WebSocket};
 
 const WS_BACKEND_PORT: &str = "3000";
+const RECONNECT_DELAY_MS: i32 = 1_500;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SocketStatus {
+    Connecting,
+    Connected,
+    Reconnecting,
+}
 
 pub fn login_admin_socket(
     email: String,
@@ -80,34 +91,87 @@ fn login_socket(
     on_message_handler.forget();
 }
 
-pub fn connect_socket(
-    mut on_message: impl FnMut(ServerMessage) + 'static,
-    mut on_open: impl FnMut(WebSocket) + 'static,
-    on_close: impl FnMut() + 'static,
-) -> Result<(), String> {
-    let ws =
-        WebSocket::new(&backend_ws_url()).map_err(|_| "Failed to create websocket".to_string())?;
+pub fn connect_reconnecting_socket(
+    on_message: impl FnMut(ServerMessage) + 'static,
+    on_open: impl FnMut(WebSocket) + 'static,
+    on_status: impl FnMut(SocketStatus) + 'static,
+) {
+    let on_message = Rc::new(RefCell::new(
+        Box::new(on_message) as Box<dyn FnMut(ServerMessage)>
+    ));
+    let on_open = Rc::new(RefCell::new(Box::new(on_open) as Box<dyn FnMut(WebSocket)>));
+    let on_status = Rc::new(RefCell::new(
+        Box::new(on_status) as Box<dyn FnMut(SocketStatus)>
+    ));
 
+    connect_reconnecting_attempt(on_message, on_open, on_status);
+}
+
+fn connect_reconnecting_attempt(
+    on_message: Rc<RefCell<Box<dyn FnMut(ServerMessage)>>>,
+    on_open: Rc<RefCell<Box<dyn FnMut(WebSocket)>>>,
+    on_status: Rc<RefCell<Box<dyn FnMut(SocketStatus)>>>,
+) {
+    (on_status.borrow_mut())(SocketStatus::Connecting);
+
+    let Ok(ws) = WebSocket::new(&backend_ws_url()) else {
+        (on_status.borrow_mut())(SocketStatus::Reconnecting);
+        schedule_reconnect(on_message, on_open, on_status);
+        return;
+    };
+
+    let on_open_callback = on_open.clone();
+    let on_status_callback = on_status.clone();
     let ws_for_open = ws.clone();
-    let open_handler = Closure::<dyn FnMut()>::new(move || on_open(ws_for_open.clone()));
+    let open_handler = Closure::<dyn FnMut()>::new(move || {
+        (on_status_callback.borrow_mut())(SocketStatus::Connected);
+        (on_open_callback.borrow_mut())(ws_for_open.clone());
+    });
     ws.set_onopen(Some(open_handler.as_ref().unchecked_ref()));
     open_handler.forget();
 
+    let on_message_callback = on_message.clone();
     let message_handler = Closure::<dyn FnMut(MessageEvent)>::new(move |event| {
         if let Some(text) = extract_ws_text(event) {
             if let Ok(message) = serde_json::from_str::<ServerMessage>(&text) {
-                on_message(message);
+                (on_message_callback.borrow_mut())(message);
             }
         }
     });
     ws.set_onmessage(Some(message_handler.as_ref().unchecked_ref()));
     message_handler.forget();
 
-    let close_handler = Closure::<dyn FnMut()>::new(on_close);
+    let reconnect_message = on_message.clone();
+    let reconnect_open = on_open.clone();
+    let reconnect_status = on_status.clone();
+    let close_handler = Closure::<dyn FnMut()>::new(move || {
+        (reconnect_status.borrow_mut())(SocketStatus::Reconnecting);
+        schedule_reconnect(
+            reconnect_message.clone(),
+            reconnect_open.clone(),
+            reconnect_status.clone(),
+        );
+    });
     ws.set_onclose(Some(close_handler.as_ref().unchecked_ref()));
     close_handler.forget();
+}
 
-    Ok(())
+fn schedule_reconnect(
+    on_message: Rc<RefCell<Box<dyn FnMut(ServerMessage)>>>,
+    on_open: Rc<RefCell<Box<dyn FnMut(WebSocket)>>>,
+    on_status: Rc<RefCell<Box<dyn FnMut(SocketStatus)>>>,
+) {
+    let reconnect_handler = Closure::<dyn FnMut()>::new(move || {
+        connect_reconnecting_attempt(on_message.clone(), on_open.clone(), on_status.clone());
+    });
+
+    if let Some(window) = window() {
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            reconnect_handler.as_ref().unchecked_ref(),
+            RECONNECT_DELAY_MS,
+        );
+    }
+    reconnect_handler.forget();
 }
 
 pub fn send_ws(socket: &WebSocket, message: &ClientMessage) -> Result<(), String> {

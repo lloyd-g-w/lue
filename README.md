@@ -17,6 +17,9 @@ This repository contains a small full-stack queue system:
 
 All state changes are pushed over WebSockets.
 
+Accounts, login sessions, queues, and queue entries are saved to disk as JSON so reconnects can
+resume after a backend restart.
+
 ## Run locally
 
 1. Set the super admin credentials in `.env`:
@@ -41,6 +44,13 @@ dx serve --package web
 
 The frontend expects the backend WebSocket endpoint at `ws://127.0.0.1:3000/ws`.
 
+Persistent server data is stored at `data/store.json` by default. Set `DATA_PATH` to use a
+different file:
+
+```bash
+DATA_PATH=/path/to/store.json cargo run -p server
+```
+
 ## Routes
 
 - `/` shows the admin sign-in page
@@ -50,6 +60,5 @@ The frontend expects the backend WebSocket endpoint at `ws://127.0.0.1:3000/ws`.
 
 ## Notes
 
-- Queue data is stored in memory only.
-- Account data is stored in memory only; restarting the server clears created admin and user accounts and reloads only the `.env` super admin.
-- Passwords are stored in plaintext for this prototype. For anything real, move to persistent storage and hashed passwords.
+- The `.env` super admin is bootstrapped on every server start and saved into the persistent store.
+- Passwords are stored as salted Argon2 hashes.

@@ -11,7 +11,7 @@ use crate::storage::{
     save_user_session,
 };
 use crate::view_helpers::{status_class_suffix, status_label};
-use crate::ws::{connect_socket, login_user_socket, send_ws};
+use crate::ws::{connect_reconnecting_socket, login_user_socket, send_ws, SocketStatus};
 
 #[component]
 pub fn QueuePage(queue_id: String) -> Element {
@@ -20,6 +20,7 @@ pub fn QueuePage(queue_id: String) -> Element {
     let user_session = use_signal(load_user_session);
     let feedback = use_signal(String::new);
     let auth_feedback = use_signal(String::new);
+    let connection_status = use_signal(|| SocketStatus::Connecting);
     let mut auth_email = use_signal(String::new);
     let mut auth_password = use_signal(String::new);
     let mut form_values = use_signal(BTreeMap::<String, String>::new);
@@ -40,6 +41,7 @@ pub fn QueuePage(queue_id: String) -> Element {
         let mut queue_state = queue_state;
         let mut your_entry = your_entry;
         let mut feedback = feedback;
+        let mut connection_status = connection_status;
         let mut socket = socket;
         let mut form_values = form_values;
         let queue_id = parsed_queue_id;
@@ -47,7 +49,7 @@ pub fn QueuePage(queue_id: String) -> Element {
         let existing_token = load_entry_token(queue_id);
         let user_token = load_user_session().map(|session| session.token);
 
-        let ws = connect_socket(
+        connect_reconnecting_socket(
             move |message| match message {
                 ServerMessage::QueueState {
                     queue,
@@ -78,7 +80,9 @@ pub fn QueuePage(queue_id: String) -> Element {
 
                     queue_state.set(Some(queue));
                     your_entry.set(entry);
-                    feedback.set(String::new());
+                    if connection_status() == SocketStatus::Connected {
+                        feedback.set(String::new());
+                    }
                 }
                 ServerMessage::Error { message } => feedback.set(message),
                 ServerMessage::Info { message } => feedback.set(message),
@@ -95,12 +99,14 @@ pub fn QueuePage(queue_id: String) -> Element {
                 );
                 socket.set(Some(ws));
             },
-            move || feedback.set("WebSocket disconnected".to_string()),
+            move |status| {
+                connection_status.set(status);
+                if status == SocketStatus::Reconnecting {
+                    socket.set(None);
+                    feedback.set("Live updates disconnected. Reconnecting...".to_string());
+                }
+            },
         );
-
-        if let Err(message) = ws {
-            feedback.set(message);
-        }
     });
 
     let login_user = {
@@ -204,6 +210,7 @@ pub fn QueuePage(queue_id: String) -> Element {
 
     let snapshot = queue_state();
     rsx! {
+        ConnectionStatusStrip { status: connection_status() }
         if let Some(queue) = snapshot {
             div { class: "queue-page-layout",
                 section { class: "queue-hero-panel",
@@ -261,74 +268,87 @@ pub fn QueuePage(queue_id: String) -> Element {
 
                 section { class: "queue-form-panel",
                     if your_entry().is_none() {
-                        div { class: "panel-header",
-                            div {
-                                p { class: "kicker", "Access" }
-                                h2 { "Join settings" }
-                            }
-                        }
-
-                        if let Some(user) = user_session() {
-                            div { class: "ticket-panel",
-                                p { class: "ticket-label", "Signed in user" }
-                                p { class: "hint", "{user.name} • {user.email}" }
-                                button { class: "button button-secondary", onclick: sign_out_user, "Sign out" }
-                            }
-                        } else {
-                            div { class: "form-stack",
-                                div { class: "input-group",
-                                    label { class: "label", "User email" }
-                                    input {
-                                        class: "input",
-                                        value: "{auth_email}",
-                                        oninput: move |event| auth_email.set(event.value()),
-                                        placeholder: "user@example.com"
+                        div { class: "join-panel-grid",
+                            section { class: "join-access-block",
+                                div { class: "panel-header compact-header",
+                                    div {
+                                        p { class: "kicker", "Access" }
+                                        h2 { "User login" }
                                     }
                                 }
-                                div { class: "input-group",
-                                    label { class: "label", "Password" }
-                                    input {
-                                        class: "input",
-                                        r#type: "password",
-                                        value: "{auth_password}",
-                                        oninput: move |event| auth_password.set(event.value()),
-                                        placeholder: "Password"
+
+                                if let Some(user) = user_session() {
+                                    div { class: "signed-in-strip",
+                                        div {
+                                            p { class: "ticket-label", "Signed in" }
+                                            p { class: "hint", "{user.name} • {user.email}" }
+                                        }
+                                        button { class: "button button-secondary", onclick: sign_out_user, "Sign out" }
+                                    }
+                                } else {
+                                    div { class: "auth-inline-grid",
+                                        div { class: "input-group",
+                                            label { class: "label", "User email" }
+                                            input {
+                                                class: "input",
+                                                value: "{auth_email}",
+                                                oninput: move |event| auth_email.set(event.value()),
+                                                placeholder: "user@example.com"
+                                            }
+                                        }
+                                        div { class: "input-group",
+                                            label { class: "label", "Password" }
+                                            input {
+                                                class: "input",
+                                                r#type: "password",
+                                                value: "{auth_password}",
+                                                oninput: move |event| auth_password.set(event.value()),
+                                                placeholder: "Password"
+                                            }
+                                        }
+                                        button { class: "button button-secondary auth-submit", onclick: login_user, "Sign in" }
+                                    }
+                                    if queue.allow_guests {
+                                        p { class: "hint", "Guest entry is available; sign-in is optional." }
+                                    }
+                                    if !auth_feedback().is_empty() {
+                                        p { class: "feedback", "{auth_feedback}" }
                                     }
                                 }
-                                button { class: "button button-secondary", onclick: login_user, "Sign in as user" }
-                                if queue.allow_guests {
-                                    p { class: "hint", "Skip sign-in and submit the form below as a guest if you prefer." }
-                                }
-                                if !auth_feedback().is_empty() {
-                                    p { class: "feedback", "{auth_feedback}" }
-                                }
                             }
-                        }
 
-                        if queue.allow_guests || user_session().is_some() {
-                            div { class: "panel-header",
-                                div {
-                                    p { class: "kicker", "Request Form" }
-                                    h2 { "Enter the queue" }
-                                }
-                            }
-                            div { class: "form-stack",
-                                for field in queue.fields.iter().cloned() {
-                                    div { class: "input-group",
-                                        label { class: "label", "{field.label}" }
-                                        input {
-                                            class: "input",
-                                            value: "{form_values().get(&field.key).cloned().unwrap_or_default()}",
-                                            oninput: move |event| {
-                                                let mut next = form_values();
-                                                next.insert(field.key.clone(), event.value());
-                                                form_values.set(next);
-                                            },
-                                            placeholder: "{field.label}"
+                            if queue.allow_guests || user_session().is_some() {
+                                section { class: "join-form-block",
+                                    div { class: "panel-header compact-header",
+                                        div {
+                                            p { class: "kicker", "Request Form" }
+                                            h2 { "Enter the queue" }
                                         }
                                     }
+                                    div { class: "form-stack",
+                                        for field in queue.fields.iter().cloned() {
+                                            div { class: "input-group",
+                                                label { class: "label", "{field.label}" }
+                                                input {
+                                                    class: "input",
+                                                    value: "{form_values().get(&field.key).cloned().unwrap_or_default()}",
+                                                    oninput: move |event| {
+                                                        let mut next = form_values();
+                                                        next.insert(field.key.clone(), event.value());
+                                                        form_values.set(next);
+                                                    },
+                                                    placeholder: "{field.label}"
+                                                }
+                                            }
+                                        }
+                                        button { class: "button button-primary", onclick: join_queue, "Join queue" }
+                                    }
                                 }
-                                button { class: "button button-primary", onclick: join_queue, "Join queue" }
+                            } else {
+                                section { class: "join-form-block locked-block",
+                                    p { class: "ticket-label", "Account required" }
+                                    p { class: "hint", "Sign in above to unlock this queue form." }
+                                }
                             }
                         }
                     } else if let Some(entry) = your_entry() {
@@ -372,5 +392,35 @@ pub fn QueuePage(queue_id: String) -> Element {
                 }
             }
         }
+    }
+}
+
+#[component]
+fn ConnectionStatusStrip(status: SocketStatus) -> Element {
+    let (label, detail) = match status {
+        SocketStatus::Connected => ("Live", "Queue updates are streaming."),
+        SocketStatus::Connecting => ("Connecting", "Opening the queue channel."),
+        SocketStatus::Reconnecting => (
+            "Reconnecting",
+            "Connection dropped. Retrying automatically.",
+        ),
+    };
+
+    rsx! {
+        div { class: "connection-banner {connection_class(status)}",
+            span { class: "connection-orb" }
+            div {
+                strong { "{label}" }
+                p { "{detail}" }
+            }
+        }
+    }
+}
+
+fn connection_class(status: SocketStatus) -> &'static str {
+    match status {
+        SocketStatus::Connected => "connection-live",
+        SocketStatus::Connecting => "connection-connecting",
+        SocketStatus::Reconnecting => "connection-reconnecting",
     }
 }

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use shared::{AccountRole, QueueEntryStatus, QueueField, QueueSummary};
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
@@ -9,6 +11,7 @@ use uuid::Uuid;
 pub struct AppState {
     pub store: Arc<RwLock<Store>>,
     pub updates: broadcast::Sender<Uuid>,
+    pub data_path: PathBuf,
 }
 
 #[derive(Default)]
@@ -18,37 +21,65 @@ pub struct Store {
     pub admin_sessions: HashMap<String, AdminSession>,
     pub user_sessions: HashMap<String, UserSession>,
     pub queues: HashMap<Uuid, Queue>,
+    pub archived_queues: HashMap<Uuid, ArchivedQueue>,
+    pub groups: HashMap<Uuid, Group>,
     pub entry_index: HashMap<Uuid, Uuid>,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Account {
     pub id: Uuid,
     pub name: String,
     pub email: String,
-    pub password: String,
+    #[serde(alias = "password")]
+    pub password_hash: String,
     pub role: AccountRole,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
 pub struct AdminSession {
     pub token: String,
     pub account_id: Uuid,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
 pub struct UserSession {
     pub token: String,
     pub account_id: Uuid,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Queue {
     pub id: Uuid,
     pub name: String,
     pub allow_guests: bool,
     pub owner_account_id: Uuid,
     pub owner_name: String,
+    #[serde(default)]
+    pub shared_account_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub shared_group_ids: Vec<Uuid>,
     pub fields: Vec<QueueField>,
     pub entries: Vec<QueueEntry>,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub struct ArchivedQueue {
+    pub queue: Queue,
+    pub closed_at: String,
+    pub closed_by_account_id: Uuid,
+    pub closed_by_name: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Group {
+    pub id: Uuid,
+    pub name: String,
+    pub role: AccountRole,
+    pub member_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 pub struct QueueEntry {
     pub id: Uuid,
     pub token: String,
@@ -81,6 +112,13 @@ impl Account {
 
     pub fn can_administer(&self) -> bool {
         matches!(self.role, AccountRole::SuperAdmin | AccountRole::Admin)
+    }
+
+    pub fn can_join_queues(&self) -> bool {
+        matches!(
+            self.role,
+            AccountRole::SuperAdmin | AccountRole::Admin | AccountRole::User
+        )
     }
 }
 
