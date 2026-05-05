@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use crate::models::AdminSessionRecord;
 use crate::route::{navigate, Route};
 use crate::storage::{load_admin_session, save_admin_session};
+use crate::view_helpers::is_enter_key;
 use crate::ws::login_admin_socket;
 
 #[component]
@@ -17,7 +18,7 @@ pub fn HomePage(route: Signal<Route>) -> Element {
         let admin_password = admin_password;
         let mut feedback = feedback;
         let route = route;
-        move |_| {
+        EventHandler::new(move |_| {
             feedback.set("Signing in...".to_string());
             login_admin_socket(
                 admin_email(),
@@ -39,7 +40,7 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                 },
                 feedback,
             );
-        }
+        })
     };
 
     rsx! {
@@ -88,6 +89,12 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                         class: "input",
                         value: "{admin_email}",
                         oninput: move |event| admin_email.set(event.value()),
+                        onkeydown: move |event| {
+                            if is_enter_key(&event) {
+                                event.prevent_default();
+                                login.call(());
+                            }
+                        },
                         placeholder: "admin@example.com"
                     }
                 }
@@ -98,11 +105,17 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                         r#type: "password",
                         value: "{admin_password}",
                         oninput: move |event| admin_password.set(event.value()),
+                        onkeydown: move |event| {
+                            if is_enter_key(&event) {
+                                event.prevent_default();
+                                login.call(());
+                            }
+                        },
                         placeholder: "Password"
                     }
                 }
                 div { class: "action-stack",
-                    button { class: "button button-primary", onclick: login, "Enter dashboard" }
+                    button { class: "button button-primary", onclick: move |_| login.call(()), "Enter dashboard" }
                     if existing_session.is_some() {
                         button {
                             class: "button button-secondary",

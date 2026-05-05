@@ -10,7 +10,7 @@ use crate::storage::{
     clear_entry_token, clear_user_session, load_entry_token, load_user_session, save_entry_token,
     save_user_session,
 };
-use crate::view_helpers::{status_class_suffix, status_label};
+use crate::view_helpers::{is_enter_key, status_class_suffix, status_label};
 use crate::ws::{connect_reconnecting_socket, login_user_socket, send_ws, SocketStatus};
 
 #[component]
@@ -115,7 +115,7 @@ pub fn QueuePage(queue_id: String) -> Element {
         let auth_email = auth_email;
         let auth_password = auth_password;
         let mut auth_feedback = auth_feedback;
-        move |_| {
+        EventHandler::new(move |_| {
             auth_feedback.set("Signing in...".to_string());
             login_user_socket(
                 auth_email(),
@@ -143,7 +143,7 @@ pub fn QueuePage(queue_id: String) -> Element {
                 },
                 auth_feedback,
             );
-        }
+        })
     };
 
     let sign_out_user = {
@@ -159,7 +159,7 @@ pub fn QueuePage(queue_id: String) -> Element {
         let form_values = form_values;
         let user_session = user_session;
         let socket = socket;
-        move |_| {
+        EventHandler::new(move |_| {
             if let Some(queue) = queue_state() {
                 if let Some(ws) = socket() {
                     let _ = send_ws(
@@ -172,7 +172,7 @@ pub fn QueuePage(queue_id: String) -> Element {
                     );
                 }
             }
-        }
+        })
     };
 
     let leave_queue = {
@@ -293,6 +293,12 @@ pub fn QueuePage(queue_id: String) -> Element {
                                                 class: "input",
                                                 value: "{auth_email}",
                                                 oninput: move |event| auth_email.set(event.value()),
+                                                onkeydown: move |event| {
+                                                    if is_enter_key(&event) {
+                                                        event.prevent_default();
+                                                        login_user.call(());
+                                                    }
+                                                },
                                                 placeholder: "user@example.com"
                                             }
                                         }
@@ -303,10 +309,16 @@ pub fn QueuePage(queue_id: String) -> Element {
                                                 r#type: "password",
                                                 value: "{auth_password}",
                                                 oninput: move |event| auth_password.set(event.value()),
+                                                onkeydown: move |event| {
+                                                    if is_enter_key(&event) {
+                                                        event.prevent_default();
+                                                        login_user.call(());
+                                                    }
+                                                },
                                                 placeholder: "Password"
                                             }
                                         }
-                                        button { class: "button button-secondary auth-submit", onclick: login_user, "Sign in" }
+                                        button { class: "button button-secondary auth-submit", onclick: move |_| login_user.call(()), "Sign in" }
                                     }
                                     if queue.allow_guests {
                                         p { class: "hint", "Guest entry is available; sign-in is optional." }
@@ -327,21 +339,34 @@ pub fn QueuePage(queue_id: String) -> Element {
                                     }
                                     div { class: "form-stack",
                                         for field in queue.fields.iter().cloned() {
-                                            div { class: "input-group",
-                                                label { class: "label", "{field.label}" }
-                                                input {
-                                                    class: "input",
-                                                    value: "{form_values().get(&field.key).cloned().unwrap_or_default()}",
-                                                    oninput: move |event| {
-                                                        let mut next = form_values();
-                                                        next.insert(field.key.clone(), event.value());
-                                                        form_values.set(next);
-                                                    },
-                                                    placeholder: "{field.label}"
+                                            if !(user_session().is_some() && field.key == "name" && !field.required) {
+                                                div { class: "input-group",
+                                                    label { class: "label",
+                                                        "{field.label}"
+                                                        if !field.required {
+                                                            " optional"
+                                                        }
+                                                    }
+                                                    input {
+                                                        class: "input",
+                                                        value: "{form_values().get(&field.key).cloned().unwrap_or_default()}",
+                                                        oninput: move |event| {
+                                                            let mut next = form_values();
+                                                            next.insert(field.key.clone(), event.value());
+                                                            form_values.set(next);
+                                                        },
+                                                        onkeydown: move |event| {
+                                                            if is_enter_key(&event) {
+                                                                event.prevent_default();
+                                                                join_queue.call(());
+                                                            }
+                                                        },
+                                                        placeholder: "{field.label}"
+                                                    }
                                                 }
                                             }
                                         }
-                                        button { class: "button button-primary", onclick: join_queue, "Join queue" }
+                                        button { class: "button button-primary", onclick: move |_| join_queue.call(()), "Join queue" }
                                     }
                                 }
                             } else {

@@ -44,23 +44,6 @@ pub fn normalize_email(value: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
-pub fn display_label_from_values(values: &std::collections::BTreeMap<String, String>) -> String {
-    if let Some(name) = values
-        .get("name")
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        return name.to_string();
-    }
-
-    values
-        .values()
-        .map(|value| value.trim())
-        .find(|value| !value.is_empty())
-        .unwrap_or("Guest")
-        .to_string()
-}
-
 fn slugify(value: &str) -> String {
     value
         .chars()

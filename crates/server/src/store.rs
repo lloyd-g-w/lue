@@ -12,7 +12,7 @@ use crate::model::{
     Account, AdminSession, ArchivedQueue, Group, Queue, QueueEntry, Store, UserSession,
 };
 use crate::password::{hash_password, verify_password};
-use crate::utils::{display_label_from_values, normalize_email, normalize_fields};
+use crate::utils::{normalize_email, normalize_fields};
 
 impl Store {
     pub fn bootstrap_super_admin(
@@ -238,9 +238,6 @@ impl Store {
         }
 
         let fields = normalize_fields(fields)?;
-        if fields.is_empty() {
-            return Err("at least one queue field is required".to_string());
-        }
 
         let id = Uuid::new_v4();
         self.queues.insert(
@@ -578,11 +575,17 @@ impl Store {
             .ok_or_else(|| "queue not found".to_string())?;
 
         for field in &queue.fields {
-            let value = values
+            let mut value = values
                 .remove(&field.key)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
+
+            if field.key == "name" && value.is_empty() {
+                if let Some((_, requester_name, _, _)) = requester.as_ref() {
+                    value = requester_name.clone();
+                }
+            }
 
             if field.required && value.is_empty() {
                 return Err(format!("{} is required", field.label));
@@ -595,7 +598,7 @@ impl Store {
             if let Some(requester) = requester {
                 requester
             } else if queue.allow_guests {
-                (None, display_label_from_values(&values), None, true)
+                (None, "Guest".to_string(), None, true)
             } else {
                 return Err("this queue requires a user account".to_string());
             };
@@ -1144,5 +1147,155 @@ mod tests {
                 .map(|archive| archive.queue.entries.len()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn signed_in_join_infers_optional_name_field() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+        store
+            .create_account(
+                &admin.token,
+                "Ada Lovelace".to_string(),
+                "ada@example.com".to_string(),
+                "ada-pass".to_string(),
+                AccountRole::User,
+            )
+            .expect("create user");
+        let user = store
+            .login_user("ada@example.com".to_string(), "ada-pass".to_string())
+            .expect("login user");
+
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                vec![
+                    QueueField {
+                        key: "name".to_string(),
+                        label: "Name".to_string(),
+                        required: false,
+                    },
+                    QueueField {
+                        key: "subject".to_string(),
+                        label: "Subject".to_string(),
+                        required: true,
+                    },
+                ],
+                false,
+            )
+            .expect("create queue");
+        let mut values = BTreeMap::new();
+        values.insert("subject".to_string(), "Compiler help".to_string());
+
+        store
+            .join_queue(queue_id, values, Some(&user.token))
+            .expect("join queue");
+
+        let entry = store
+            .queues
+            .get(&queue_id)
+            .and_then(|queue| queue.entries.first())
+            .expect("queue entry");
+        assert_eq!(entry.requester_label, "Ada Lovelace");
+        assert_eq!(entry.values.get("name"), Some(&"Ada Lovelace".to_string()));
+        assert_eq!(
+            entry.values.get("subject"),
+            Some(&"Compiler help".to_string())
+        );
+    }
+
+    #[test]
+    fn queue_can_be_created_and_joined_without_fields() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+        store
+            .create_account(
+                &admin.token,
+                "Ada Lovelace".to_string(),
+                "ada@example.com".to_string(),
+                "ada-pass".to_string(),
+                AccountRole::User,
+            )
+            .expect("create user");
+        let user = store
+            .login_user("ada@example.com".to_string(), "ada-pass".to_string())
+            .expect("login user");
+
+        let queue_id = store
+            .create_queue(&admin.token, "Support".to_string(), Vec::new(), false)
+            .expect("create queue");
+
+        store
+            .join_queue(queue_id, BTreeMap::new(), Some(&user.token))
+            .expect("join queue");
+
+        let entry = store
+            .queues
+            .get(&queue_id)
+            .and_then(|queue| queue.entries.first())
+            .expect("queue entry");
+        assert_eq!(entry.requester_label, "Ada Lovelace");
+        assert!(entry.values.is_empty());
+    }
+
+    #[test]
+    fn guest_requester_label_is_always_guest() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                vec![QueueField {
+                    key: "account".to_string(),
+                    label: "Account".to_string(),
+                    required: true,
+                }],
+                true,
+            )
+            .expect("create queue");
+        let mut values = BTreeMap::new();
+        values.insert("account".to_string(), "Ada".to_string());
+
+        store
+            .join_queue(queue_id, values, None)
+            .expect("join queue");
+
+        let entry = store
+            .queues
+            .get(&queue_id)
+            .and_then(|queue| queue.entries.first())
+            .expect("queue entry");
+        assert_eq!(entry.requester_label, "Guest");
+        assert_eq!(entry.values.get("account"), Some(&"Ada".to_string()));
     }
 }

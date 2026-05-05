@@ -9,7 +9,7 @@ use web_sys::WebSocket;
 use crate::models::{AccountDraft, EditableField, GroupDraft};
 use crate::route::{frontend_url, navigate, Route};
 use crate::storage::{clear_admin_session, load_admin_session};
-use crate::view_helpers::{format_timestamp, secondary_field, slugify, status_class, status_label};
+use crate::view_helpers::{format_timestamp, is_enter_key, slugify, status_class, status_label};
 use crate::ws::{connect_reconnecting_socket, send_ws, SocketStatus};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -52,9 +52,9 @@ pub fn AdminPage(
     let connection_status = use_signal(|| SocketStatus::Connecting);
     let mut active_section = use_signal(|| AdminSection::Queues);
     let socket = use_signal(|| None::<WebSocket>);
-    let queue_name = use_signal(|| "Student Support".to_string());
-    let queue_allow_guests = use_signal(|| true);
-    let fields = use_signal(|| vec![EditableField::new("Name"), EditableField::new("Subject")]);
+    let queue_name = use_signal(String::new);
+    let queue_allow_guests = use_signal(|| false);
+    let fields = use_signal(Vec::<EditableField>::new);
     let account_draft = use_signal(AccountDraft::default);
     let group_draft = use_signal(GroupDraft::default);
     let share_account_ids = use_signal(Vec::<Uuid>::new);
@@ -141,10 +141,13 @@ pub fn AdminPage(
         move |_| {
             let field_values: Vec<QueueField> = fields()
                 .iter()
-                .map(|field| QueueField {
-                    key: slugify(&field.label),
-                    label: field.label.clone(),
-                    required: true,
+                .map(|field| {
+                    let key = slugify(&field.label);
+                    QueueField {
+                        key: key.clone(),
+                        label: field.label.clone(),
+                        required: key != "name",
+                    }
                 })
                 .collect();
 
@@ -579,9 +582,9 @@ fn render_admin_page(
     group_draft: Signal<GroupDraft>,
     share_account_ids: Signal<Vec<Uuid>>,
     share_group_ids: Signal<Vec<Uuid>>,
-    create_queue: EventHandler<MouseEvent>,
-    create_account: EventHandler<MouseEvent>,
-    create_group: EventHandler<MouseEvent>,
+    create_queue: EventHandler<()>,
+    create_account: EventHandler<()>,
+    create_group: EventHandler<()>,
     update_account: EventHandler<Uuid>,
     delete_account: EventHandler<Uuid>,
     update_group: EventHandler<Uuid>,
@@ -750,40 +753,54 @@ fn NewQueuePage(
     queue_name: Signal<String>,
     queue_allow_guests: Signal<bool>,
     fields: Signal<Vec<EditableField>>,
-    create_queue: EventHandler<MouseEvent>,
+    create_queue: EventHandler<()>,
 ) -> Element {
     let mut queue_name = queue_name;
     let mut queue_allow_guests = queue_allow_guests;
     let mut fields = fields;
 
     rsx! {
-        section { class: "table-page-section split-view-section",
+        section { class: "table-page-section split-view-section create-queue-section",
             div { class: "panel-header",
                 div {
                     p { class: "kicker", "Create Queue" }
                     h2 { "New queue" }
                     p { class: "lede", "Set up the public join form and access mode before sharing a queue link." }
                 }
+                label { class: "access-switch",
+                    input {
+                        r#type: "checkbox",
+                        checked: "{queue_allow_guests}",
+                        oninput: move |event| queue_allow_guests.set(event.checked())
+                    }
+                    span { class: "switch-track",
+                        span { class: "switch-thumb" }
+                    }
+                    span { class: "switch-label", "Guests" }
+                }
             }
-            div { class: "form-stack wide-form",
+            div { class: "form-stack wide-form create-queue-form",
                 div { class: "input-group",
                     label { class: "label", "Queue name" }
                     input {
                         class: "input",
                         value: "{queue_name}",
                         oninput: move |event| queue_name.set(event.value()),
+                        onkeydown: move |event| {
+                            if is_enter_key(&event) {
+                                event.prevent_default();
+                                create_queue.call(());
+                            }
+                        },
                         placeholder: "Student Support"
                     }
                 }
-                label { class: "toggle-row ticket-panel",
-                    input {
-                        r#type: "checkbox",
-                        checked: "{queue_allow_guests}",
-                        oninput: move |event| queue_allow_guests.set(event.checked())
-                    }
-                    span { "Allow guests to join without a user account" }
-                }
                 div { class: "field-list",
+                    if fields().is_empty() {
+                        div { class: "empty-panel",
+                            p { class: "hint", "No custom fields" }
+                        }
+                    }
                     for (index, field) in fields().iter().enumerate() {
                         div { class: "field-editor-row",
                             input {
@@ -796,16 +813,22 @@ fn NewQueuePage(
                                     }
                                     fields.set(next);
                                 },
-                                placeholder: "Field label"
+                                onkeydown: move |event| {
+                                    if is_enter_key(&event) {
+                                        event.prevent_default();
+                                        create_queue.call(());
+                                    }
+                                },
+                                placeholder: field_placeholder(index)
                             }
                             button {
                                 class: "button button-secondary",
                                 onclick: move |_| {
                                     let mut next = fields();
-                                    if next.len() > 1 {
+                                    if index < next.len() {
                                         next.remove(index);
-                                        fields.set(next);
                                     }
+                                    fields.set(next);
                                 },
                                 "Remove"
                             }
@@ -817,12 +840,12 @@ fn NewQueuePage(
                         class: "button button-secondary",
                         onclick: move |_| {
                             let mut next = fields();
-                            next.push(EditableField::new("New field"));
+                            next.push(EditableField::new(""));
                             fields.set(next);
                         },
                         "Add field"
                     }
-                    button { class: "button button-primary", onclick: move |event| create_queue.call(event), "Create queue" }
+                    button { class: "button button-primary", onclick: move |_| create_queue.call(()), "Create queue" }
                 }
             }
         }
@@ -834,8 +857,8 @@ fn AccountsPage(
     state: AdminStateView,
     account_draft: Signal<AccountDraft>,
     group_draft: Signal<GroupDraft>,
-    create_account: EventHandler<MouseEvent>,
-    create_group: EventHandler<MouseEvent>,
+    create_account: EventHandler<()>,
+    create_group: EventHandler<()>,
     update_account: EventHandler<Uuid>,
     delete_account: EventHandler<Uuid>,
     update_group: EventHandler<Uuid>,
@@ -1001,6 +1024,17 @@ fn AccountsPage(
                                     next.name = event.value();
                                     account_draft.set(next);
                                 },
+                                onkeydown: move |event| {
+                                    if is_enter_key(&event) {
+                                        event.prevent_default();
+                                        if let Some(account_id) = editing_account_id() {
+                                            update_account.call(account_id);
+                                        } else {
+                                            create_account.call(());
+                                        }
+                                        account_modal_open.set(false);
+                                    }
+                                },
                                 placeholder: "Jordan Lee"
                             }
                         }
@@ -1013,6 +1047,17 @@ fn AccountsPage(
                                     let mut next = account_draft();
                                     next.email = event.value();
                                     account_draft.set(next);
+                                },
+                                onkeydown: move |event| {
+                                    if is_enter_key(&event) {
+                                        event.prevent_default();
+                                        if let Some(account_id) = editing_account_id() {
+                                            update_account.call(account_id);
+                                        } else {
+                                            create_account.call(());
+                                        }
+                                        account_modal_open.set(false);
+                                    }
                                 },
                                 placeholder: "person@example.com"
                             }
@@ -1027,6 +1072,17 @@ fn AccountsPage(
                                     let mut next = account_draft();
                                     next.password = event.value();
                                     account_draft.set(next);
+                                },
+                                onkeydown: move |event| {
+                                    if is_enter_key(&event) {
+                                        event.prevent_default();
+                                        if let Some(account_id) = editing_account_id() {
+                                            update_account.call(account_id);
+                                        } else {
+                                            create_account.call(());
+                                        }
+                                        account_modal_open.set(false);
+                                    }
                                 },
                                 placeholder: if editing_account_id().is_some() { "Leave blank to keep current password" } else { "Temporary password" }
                             }
@@ -1059,8 +1115,8 @@ fn AccountsPage(
                             } else {
                                 button {
                                     class: "button button-primary",
-                                    onclick: move |event| {
-                                        create_account.call(event);
+                                    onclick: move |_| {
+                                        create_account.call(());
                                         account_modal_open.set(false);
                                     },
                                     "Create account"
@@ -1113,6 +1169,17 @@ fn AccountsPage(
                                     next.name = event.value();
                                     group_draft.set(next);
                                 },
+                                onkeydown: move |event| {
+                                    if is_enter_key(&event) {
+                                        event.prevent_default();
+                                        if let Some(group_id) = editing_group_id() {
+                                            update_group.call(group_id);
+                                        } else {
+                                            create_group.call(());
+                                        }
+                                        group_modal_open.set(false);
+                                    }
+                                },
                                 placeholder: "Support admins"
                             }
                         }
@@ -1164,8 +1231,8 @@ fn AccountsPage(
                             } else {
                                 button {
                                     class: "button button-primary",
-                                    onclick: move |event| {
-                                        create_group.call(event);
+                                    onclick: move |_| {
+                                        create_group.call(());
                                         group_modal_open.set(false);
                                     },
                                     "Create group"
@@ -1319,6 +1386,7 @@ fn QueueRequestsPage(
         queue_id: queue.summary.id.to_string(),
     });
     let queue_name = queue.summary.name.clone();
+    let list_fields = request_list_fields(&queue.fields);
 
     rsx! {
         section { class: "table-page-section",
@@ -1441,7 +1509,9 @@ fn QueueRequestsPage(
                     thead {
                         tr {
                             th { "Requester" }
-                            th { "Subject" }
+                            for field in list_fields.iter().cloned() {
+                                th { "{field.label}" }
+                            }
                             th { "Status" }
                             th { "Submitted" }
                             th { "Claimed by" }
@@ -1462,7 +1532,9 @@ fn QueueRequestsPage(
                                         div { class: "mono small-text row-meta", "{email}" }
                                     }
                                 }
-                                td { "{secondary_field(queue.fields.as_slice(), &entry)}" }
+                                for field in list_fields.iter().cloned() {
+                                    td { "{request_field_value(&field, &entry)}" }
+                                }
                                 td { span { class: status_class(&entry.status), "{status_label(&entry.status)}" } }
                                 td { class: "mono small-text", "{format_timestamp(&entry.submitted_at)}" }
                                 td { "{handled_by_label(&entry)}" }
@@ -1663,6 +1735,29 @@ fn role_from_value(value: &str) -> AccountRole {
         "admin" => AccountRole::Admin,
         _ => AccountRole::User,
     }
+}
+
+fn field_placeholder(index: usize) -> String {
+    format!("Field {}", index + 1)
+}
+
+fn request_list_fields(fields: &[QueueField]) -> Vec<QueueField> {
+    fields
+        .iter()
+        .filter(|field| field.key != "name")
+        .take(2)
+        .cloned()
+        .collect()
+}
+
+fn request_field_value(field: &QueueField, entry: &AdminEntryView) -> String {
+    entry
+        .values
+        .get(&field.key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Empty")
+        .to_string()
 }
 
 fn role_label(role: &AccountRole) -> &'static str {

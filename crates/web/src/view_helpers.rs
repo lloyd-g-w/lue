@@ -1,4 +1,5 @@
-use shared::{AdminEntryView, QueueEntryStatus, QueueField};
+use dioxus::prelude::{Key, KeyboardEvent};
+use shared::QueueEntryStatus;
 use wasm_bindgen::JsValue;
 
 pub fn slugify(value: &str) -> String {
@@ -46,13 +47,8 @@ pub fn status_class_suffix(status: &QueueEntryStatus) -> &'static str {
     }
 }
 
-pub fn secondary_field(fields: &[QueueField], entry: &AdminEntryView) -> String {
-    fields
-        .get(1)
-        .and_then(|field| entry.values.get(&field.key))
-        .cloned()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "No extra subject".to_string())
+pub fn is_enter_key(event: &KeyboardEvent) -> bool {
+    event.key() == Key::Enter
 }
 
 pub fn format_timestamp(value: &str) -> String {

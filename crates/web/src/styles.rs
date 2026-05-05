@@ -340,6 +340,69 @@ code {
   justify-content: flex-start;
 }
 
+.access-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.access-switch:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
+}
+
+.access-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch-track {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background 120ms ease;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 4px rgba(20, 19, 18, 0.25);
+  transition: transform 120ms ease;
+}
+
+.access-switch input:checked + .switch-track {
+  background: var(--accent);
+}
+
+.access-switch input:checked + .switch-track .switch-thumb {
+  transform: translateX(18px);
+}
+
+.access-switch input:focus-visible + .switch-track {
+  box-shadow: 0 0 0 4px rgba(24, 101, 78, 0.12);
+}
+
+.switch-label {
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
 .list-row,
 .request-row {
   width: 100%;
@@ -686,12 +749,25 @@ code {
   align-content: start;
 }
 
+.create-queue-section {
+  grid-template-rows: auto 1fr;
+  min-height: clamp(34rem, calc(100vh - 14rem), 56rem);
+  align-content: stretch;
+}
+
 .main-panel {
   min-width: 0;
 }
 
 .wide-form {
+  width: 100%;
   max-width: 48rem;
+}
+
+.create-queue-form {
+  max-width: none;
+  align-self: stretch;
+  align-content: start;
 }
 
 .field-editor-row {
