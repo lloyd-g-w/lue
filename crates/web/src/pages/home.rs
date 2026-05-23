@@ -11,7 +11,19 @@ pub fn HomePage(route: Signal<Route>) -> Element {
     let mut admin_email = use_signal(String::new);
     let mut admin_password = use_signal(String::new);
     let feedback = use_signal(String::new);
-    let existing_session = load_admin_session();
+    let has_existing_session = load_admin_session().is_some();
+
+    use_effect(move || {
+        if has_existing_session {
+            navigate(
+                route,
+                Route::Admin {
+                    queue_id: None,
+                    request_id: None,
+                },
+            );
+        }
+    });
 
     let login = {
         let admin_email = admin_email;
@@ -44,7 +56,13 @@ pub fn HomePage(route: Signal<Route>) -> Element {
     };
 
     rsx! {
-        div { class: "landing-layout",
+        if has_existing_session {
+            section { class: "empty-stage",
+                h1 { "Opening dashboard" }
+                p { class: "lede", "Using your saved admin session." }
+            }
+        } else {
+            div { class: "landing-layout",
             section { class: "landing-copy",
                 p { class: "kicker", "Queue System" }
                 h1 { "A cleaner way to run live queues." }
@@ -116,26 +134,11 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                 }
                 div { class: "action-stack",
                     button { class: "button button-primary", onclick: move |_| login.call(()), "Enter dashboard" }
-                    if existing_session.is_some() {
-                        button {
-                            class: "button button-secondary",
-                            onclick: move |_| navigate(route, Route::Admin { queue_id: None, request_id: None }),
-                            "Resume saved session"
-                        }
-                    }
-                }
-                if let Some(session) = existing_session {
-                    p { class: "hint",
-                        "Saved session: "
-                        strong { "{session.email}" }
-                        if session.is_super_admin {
-                            " (super admin)"
-                        }
-                    }
                 }
                 if !feedback().is_empty() {
                     p { class: "feedback", "{feedback}" }
                 }
+            }
             }
         }
     }

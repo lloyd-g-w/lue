@@ -107,7 +107,14 @@ pub fn AdminPage(
                     feedback.set("Queue access updated".to_string())
                 }
                 ServerMessage::QueueClosed => feedback.set("Queue closed and archived".to_string()),
-                ServerMessage::Error { message } => feedback.set(message),
+                ServerMessage::Error { message } => {
+                    if message == "unknown admin session" {
+                        clear_admin_session();
+                        navigate(route, Route::Home);
+                    } else {
+                        feedback.set(message);
+                    }
+                }
                 ServerMessage::Info { message } => feedback.set(message),
                 _ => {}
             },
