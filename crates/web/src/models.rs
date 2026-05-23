@@ -19,12 +19,14 @@ pub struct UserSessionRecord {
 #[derive(Clone, PartialEq)]
 pub struct EditableField {
     pub label: String,
+    pub required: bool,
 }
 
 impl EditableField {
     pub fn new(label: &str) -> Self {
         Self {
             label: label.to_string(),
+            required: true,
         }
     }
 }

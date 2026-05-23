@@ -34,6 +34,12 @@ pub enum ClientMessage {
         fields: Vec<QueueField>,
         allow_guests: bool,
     },
+    UpdateQueueSettings {
+        admin_token: String,
+        queue_id: Uuid,
+        fields: Vec<QueueField>,
+        allow_guests: bool,
+    },
     CreateAccount {
         admin_token: String,
         name: String,
@@ -126,6 +132,7 @@ pub enum ServerMessage {
     QueueCreated {
         queue_id: Uuid,
     },
+    QueueSettingsUpdated,
     AccountCreated,
     AccountUpdated,
     AccountDeleted,

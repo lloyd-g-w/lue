@@ -106,6 +106,9 @@ pub fn AdminPage(
                 ServerMessage::QueueSharingUpdated => {
                     feedback.set("Queue access updated".to_string())
                 }
+                ServerMessage::QueueSettingsUpdated => {
+                    feedback.set("Queue settings updated".to_string())
+                }
                 ServerMessage::QueueClosed => feedback.set("Queue closed and archived".to_string()),
                 ServerMessage::Error { message } => {
                     if message == "unknown admin session" {
@@ -153,7 +156,7 @@ pub fn AdminPage(
                     QueueField {
                         key: key.clone(),
                         label: field.label.clone(),
-                        required: key != "name",
+                        required: field.required,
                     }
                 })
                 .collect();
@@ -174,6 +177,45 @@ pub fn AdminPage(
                     .set("Reconnecting before queue creation. Try again in a moment.".to_string());
             }
         }
+    };
+
+    let update_queue_settings = {
+        let socket = socket;
+        let mut feedback = feedback;
+        let admin_token = admin_session.token.clone();
+        EventHandler::new(
+            move |(queue_id, fields, allow_guests): (Uuid, Vec<EditableField>, bool)| {
+                let field_values: Vec<QueueField> = fields
+                    .iter()
+                    .map(|field| {
+                        let key = slugify(&field.label);
+                        QueueField {
+                            key,
+                            label: field.label.clone(),
+                            required: field.required,
+                        }
+                    })
+                    .collect();
+
+                if let Some(ws) = socket() {
+                    feedback.set("Updating queue settings...".to_string());
+                    let _ = send_ws(
+                        &ws,
+                        &ClientMessage::UpdateQueueSettings {
+                            admin_token: admin_token.clone(),
+                            queue_id,
+                            fields: field_values,
+                            allow_guests,
+                        },
+                    );
+                } else {
+                    feedback.set(
+                        "Reconnecting before queue settings update. Try again in a moment."
+                            .to_string(),
+                    );
+                }
+            },
+        )
     };
 
     let create_account = {
@@ -543,6 +585,7 @@ pub fn AdminPage(
                             share_account_ids,
                             share_group_ids,
                             create_queue,
+                            update_queue_settings,
                             create_account,
                             create_group,
                             update_account,
@@ -590,6 +633,7 @@ fn render_admin_page(
     share_account_ids: Signal<Vec<Uuid>>,
     share_group_ids: Signal<Vec<Uuid>>,
     create_queue: EventHandler<()>,
+    update_queue_settings: EventHandler<(Uuid, Vec<EditableField>, bool)>,
     create_account: EventHandler<()>,
     create_group: EventHandler<()>,
     update_account: EventHandler<Uuid>,
@@ -650,6 +694,7 @@ fn render_admin_page(
                 share_account_ids,
                 share_group_ids,
                 update_queue_sharing,
+                update_queue_settings,
                 close_queue,
                 claim_entry,
                 unclaim_entry,
@@ -828,6 +873,26 @@ fn NewQueuePage(
                                 },
                                 placeholder: field_placeholder(index)
                             }
+                            label { class: "field-required-toggle",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: "{field.required}",
+                                    oninput: move |event| {
+                                        let mut next = fields();
+                                        if let Some(item) = next.get_mut(index) {
+                                            item.required = event.checked();
+                                        }
+                                        fields.set(next);
+                                    }
+                                }
+                                span {
+                                    if field.required {
+                                        "Required"
+                                    } else {
+                                        "Optional"
+                                    }
+                                }
+                            }
                             button {
                                 class: "button button-secondary",
                                 onclick: move |_| {
@@ -860,6 +925,70 @@ fn NewQueuePage(
 }
 
 #[component]
+fn FieldEditorRow(
+    index: usize,
+    field: EditableField,
+    fields: Signal<Vec<EditableField>>,
+    submit: EventHandler<()>,
+) -> Element {
+    let mut fields = fields;
+
+    rsx! {
+        div { class: "field-editor-row",
+            input {
+                class: "input",
+                value: "{field.label}",
+                oninput: move |event| {
+                    let mut next = fields();
+                    if let Some(item) = next.get_mut(index) {
+                        item.label = event.value();
+                    }
+                    fields.set(next);
+                },
+                onkeydown: move |event| {
+                    if is_enter_key(&event) {
+                        event.prevent_default();
+                        submit.call(());
+                    }
+                },
+                placeholder: field_placeholder(index)
+            }
+            label { class: "field-required-toggle",
+                input {
+                    r#type: "checkbox",
+                    checked: "{field.required}",
+                    oninput: move |event| {
+                        let mut next = fields();
+                        if let Some(item) = next.get_mut(index) {
+                            item.required = event.checked();
+                        }
+                        fields.set(next);
+                    }
+                }
+                span {
+                    if field.required {
+                        "Required"
+                    } else {
+                        "Optional"
+                    }
+                }
+            }
+            button {
+                class: "button button-secondary",
+                onclick: move |_| {
+                    let mut next = fields();
+                    if index < next.len() {
+                        next.remove(index);
+                    }
+                    fields.set(next);
+                },
+                "Remove"
+            }
+        }
+    }
+}
+
+#[component]
 fn AccountsPage(
     state: AdminStateView,
     account_draft: Signal<AccountDraft>,
@@ -877,6 +1006,7 @@ fn AccountsPage(
     let mut editing_group_id = use_signal(|| None::<Uuid>);
     let mut account_modal_open = use_signal(|| false);
     let mut group_modal_open = use_signal(|| false);
+    let editing_self = editing_account_id() == Some(state.admin.account_id);
 
     rsx! {
         section { class: "table-page-section split-view-section",
@@ -887,7 +1017,6 @@ fn AccountsPage(
                     p { class: "lede", "Create admins, users, or additional super admins. Passwords are stored as hashes." }
                 }
                 div { class: "button-row",
-                    span { class: "counter-chip", "{state.accounts.len()} accounts" }
                     button {
                         class: "button button-primary",
                         onclick: move |_| {
@@ -909,23 +1038,35 @@ fn AccountsPage(
                 }
             }
             div { class: "account-management-grid",
-                div { class: "table-shell",
-                    table { class: "data-table accounts-table",
-                        thead {
-                            tr {
-                                th { "Name" }
-                                th { "Email" }
-                                th { "Role" }
-                                th { "Actions" }
-                            }
+                section { class: "account-list-panel",
+                    div { class: "account-section-header",
+                        div {
+                            p { class: "kicker", "People" }
+                            h3 { "Accounts" }
                         }
-                        tbody {
+                        div { class: "account-role-summary",
+                            span { class: "account-role-chip", "{role_count(&state.accounts, &AccountRole::SuperAdmin)} super" }
+                            span { class: "account-role-chip", "{role_count(&state.accounts, &AccountRole::Admin)} admins" }
+                            span { class: "account-role-chip", "{role_count(&state.accounts, &AccountRole::User)} users" }
+                        }
+                    }
+                    if state.accounts.is_empty() {
+                        div { class: "empty-panel",
+                            p { "No accounts yet." }
+                        }
+                    } else {
+                        div { class: "account-card-list",
                             for account in state.accounts.iter().cloned() {
-                                tr {
-                                    td { "{account.name}" }
-                                    td { class: "mono small-text", "{account.email}" }
-                                    td { "{role_label(&account.role)}" }
-                                    td {
+                                article { class: "account-card",
+                                    div { class: "account-card-main",
+                                        div { class: "account-avatar", "{account_initials(&account.name)}" }
+                                        div {
+                                            h4 { "{account.name}" }
+                                            p { class: "mono small-text row-meta", "{account.email}" }
+                                        }
+                                    }
+                                    div { class: "account-card-side",
+                                        span { class: "role-pill {role_class(&account.role)}", "{role_label(&account.role)}" }
                                         div { class: "table-actions",
                                             button {
                                                 class: "action-button",
@@ -953,23 +1094,29 @@ fn AccountsPage(
                         }
                     }
                 }
-                div { class: "table-shell",
-                    table { class: "data-table accounts-table",
-                        thead {
-                            tr {
-                                th { "Group" }
-                                th { "Type" }
-                                th { "Members" }
-                                th { "Actions" }
-                            }
+                section { class: "account-list-panel",
+                    div { class: "account-section-header",
+                        div {
+                            p { class: "kicker", "Access Sets" }
+                            h3 { "Groups" }
                         }
-                        tbody {
+                        span { class: "account-role-chip", "{state.groups.len()} groups" }
+                    }
+                    if state.groups.is_empty() {
+                        div { class: "empty-panel",
+                            p { "No groups yet." }
+                        }
+                    } else {
+                        div { class: "account-card-list compact-account-list",
                             for group in state.groups.iter().cloned() {
-                                tr {
-                                    td { "{group.name}" }
-                                    td { "{role_label(&group.role)}" }
-                                    td { "{member_names(&state.accounts, &group.member_ids)}" }
-                                    td {
+                                article { class: "account-card group-card",
+                                    div {
+                                        h4 { "{group.name}" }
+                                        p { class: "row-meta", "{member_names(&state.accounts, &group.member_ids)}" }
+                                    }
+                                    div { class: "account-card-side",
+                                        span { class: "role-pill {role_class(&group.role)}", "{role_label(&group.role)}" }
+                                        span { class: "account-role-chip", "{group.member_ids.len()} members" }
                                         div { class: "table-actions",
                                             button {
                                                 class: "action-button",
@@ -1098,6 +1245,7 @@ fn AccountsPage(
                             label { class: "label", "Role" }
                             select {
                                 class: "input",
+                                disabled: editing_self,
                                 value: "{role_value(&account_draft().role)}",
                                 onchange: move |event| {
                                     let mut next = account_draft();
@@ -1107,6 +1255,9 @@ fn AccountsPage(
                                 option { value: "user", "User" }
                                 option { value: "admin", "Admin" }
                                 option { value: "super_admin", "Super Admin" }
+                            }
+                            if editing_self {
+                                p { class: "hint", "You cannot demote your own super admin account." }
                             }
                         }
                         div { class: "button-row",
@@ -1327,13 +1478,15 @@ fn QueueIndexPage(route: Signal<Route>, state: AdminStateView) -> Element {
 
 #[component]
 fn ClosedQueueIndexPage(state: AdminStateView) -> Element {
+    let mut expanded_queue_ids = use_signal(Vec::<Uuid>::new);
+
     rsx! {
         section { class: "table-page-section",
             div { class: "panel-header",
                 div {
                     p { class: "kicker", "Archive" }
                     h2 { "Closed queues" }
-                    p { class: "lede", "Closed queues are removed from active queue lists but retained here with their request history summary." }
+                    p { class: "lede", "Closed queues are removed from active lists but retain their saved request information here." }
                 }
                 span { class: "counter-chip", "{state.archived_queues.len()} closed" }
             }
@@ -1342,25 +1495,80 @@ fn ClosedQueueIndexPage(state: AdminStateView) -> Element {
                     p { "No queues have been closed yet." }
                 }
             } else {
-                div { class: "table-shell",
-                    table { class: "data-table accounts-table",
-                        thead {
-                            tr {
-                                th { "Queue" }
-                                th { "Owner" }
-                                th { "Closed by" }
-                                th { "Closed" }
-                                th { "Entries" }
+                div { class: "archive-stack",
+                    for queue in state.archived_queues.iter().cloned() {
+                        section { class: "archive-queue-panel",
+                            div { class: "panel-header compact-header",
+                                div {
+                                    h3 { "{queue.summary.name}" }
+                                    p { class: "row-meta",
+                                        "Owner: {queue.owner_name} • Closed by {queue.closed_by_name} • {format_timestamp(&queue.closed_at)}"
+                                    }
+                                }
+                                div { class: "archive-actions",
+                                    span { class: "archive-entry-count", "{queue.entry_count} entries" }
+                                    button {
+                                        class: "archive-expand-button",
+                                        onclick: move |_| {
+                                            let mut next = expanded_queue_ids();
+                                            if next.contains(&queue.summary.id) {
+                                                next.retain(|queue_id| *queue_id != queue.summary.id);
+                                            } else {
+                                                next.push(queue.summary.id);
+                                            }
+                                            expanded_queue_ids.set(next);
+                                        },
+                                        if expanded_queue_ids().contains(&queue.summary.id) {
+                                            "Hide entries"
+                                        } else {
+                                            "View entries"
+                                        }
+                                    }
+                                }
                             }
-                        }
-                        tbody {
-                            for queue in state.archived_queues.iter().cloned() {
-                                tr {
-                                    td { "{queue.summary.name}" }
-                                    td { "{queue.owner_name}" }
-                                    td { "{queue.closed_by_name}" }
-                                    td { class: "mono small-text", "{format_timestamp(&queue.closed_at)}" }
-                                    td { "{queue.entry_count}" }
+
+                            if expanded_queue_ids().contains(&queue.summary.id) && queue.entries.is_empty() {
+                                div { class: "empty-panel",
+                                    p { "No one joined this queue before it closed." }
+                                }
+                            } else if expanded_queue_ids().contains(&queue.summary.id) {
+                                div { class: "table-shell",
+                                    table { class: "data-table accounts-table",
+                                        thead {
+                                            tr {
+                                                th { "Requester" }
+                                                for field in queue.fields.iter().cloned() {
+                                                    th { "{field.label}" }
+                                                }
+                                                th { "Status" }
+                                                th { "Submitted" }
+                                                th { "Handled by" }
+                                            }
+                                        }
+                                        tbody {
+                                            for entry in queue.entries.iter().cloned() {
+                                                tr {
+                                                    td {
+                                                        div { class: "table-primary",
+                                                            "{entry.requester_label}"
+                                                            if entry.is_guest {
+                                                                span { class: "table-inline-note", "Guest" }
+                                                            }
+                                                        }
+                                                        if let Some(email) = entry.requester_email.clone() {
+                                                            div { class: "mono small-text row-meta", "{email}" }
+                                                        }
+                                                    }
+                                                    for field in queue.fields.iter().cloned() {
+                                                        td { "{request_field_value(&field, &entry)}" }
+                                                    }
+                                                    td { span { class: status_class(&entry.status), "{status_label(&entry.status)}" } }
+                                                    td { class: "mono small-text", "{format_timestamp(&entry.submitted_at)}" }
+                                                    td { "{handled_by_label(&entry)}" }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1380,6 +1588,7 @@ fn QueueRequestsPage(
     share_account_ids: Signal<Vec<Uuid>>,
     share_group_ids: Signal<Vec<Uuid>>,
     update_queue_sharing: EventHandler<Uuid>,
+    update_queue_settings: EventHandler<(Uuid, Vec<EditableField>, bool)>,
     close_queue: EventHandler<Uuid>,
     claim_entry: EventHandler<Uuid>,
     unclaim_entry: EventHandler<Uuid>,
@@ -1389,6 +1598,9 @@ fn QueueRequestsPage(
     let mut share_account_ids = share_account_ids;
     let mut share_group_ids = share_group_ids;
     let mut share_modal_open = use_signal(|| false);
+    let mut settings_modal_open = use_signal(|| false);
+    let mut settings_allow_guests = use_signal(|| queue.summary.allow_guests);
+    let mut settings_fields = use_signal(|| editable_fields_from_queue(&queue.fields));
     let queue_link = frontend_url(&Route::Queue {
         queue_id: queue.summary.id.to_string(),
     });
@@ -1419,6 +1631,15 @@ fn QueueRequestsPage(
                     button {
                         class: "button button-secondary",
                         onclick: move |_| {
+                            settings_allow_guests.set(queue.summary.allow_guests);
+                            settings_fields.set(editable_fields_from_queue(&queue.fields));
+                            settings_modal_open.set(true);
+                        },
+                        "Queue settings"
+                    }
+                    button {
+                        class: "button button-secondary",
+                        onclick: move |_| {
                             share_account_ids.set(queue.shared_account_ids.clone());
                             share_group_ids.set(queue.shared_group_ids.clone());
                             share_modal_open.set(true);
@@ -1437,6 +1658,80 @@ fn QueueRequestsPage(
                             navigate(route, Route::Admin { queue_id: None, request_id: None });
                         },
                         "Close queue"
+                    }
+                }
+            }
+            if settings_modal_open() {
+                div { class: "modal-backdrop",
+                    div { class: "modal-panel form-stack",
+                        div { class: "panel-header",
+                            div {
+                                p { class: "kicker", "Queue Settings" }
+                                h2 { "Edit live queue" }
+                            }
+                            button {
+                                class: "action-button",
+                                onclick: move |_| settings_modal_open.set(false),
+                                "Close"
+                            }
+                        }
+                        p { class: "hint", "Changes apply to the live user form. Existing requests keep their saved values." }
+                        label { class: "access-switch",
+                            input {
+                                r#type: "checkbox",
+                                checked: "{settings_allow_guests}",
+                                oninput: move |event| settings_allow_guests.set(event.checked())
+                            }
+                            span { class: "switch-track",
+                                span { class: "switch-thumb" }
+                            }
+                            span { class: "switch-label", "Guests" }
+                        }
+                        div { class: "field-list",
+                            if settings_fields().is_empty() {
+                                div { class: "empty-panel",
+                                    p { class: "hint", "No custom fields" }
+                                }
+                            }
+                            for (index, field) in settings_fields().iter().enumerate() {
+                                FieldEditorRow {
+                                    index,
+                                    field: field.clone(),
+                                    fields: settings_fields,
+                                    submit: move |_| {
+                                        update_queue_settings.call((
+                                            queue_id,
+                                            settings_fields(),
+                                            settings_allow_guests(),
+                                        ));
+                                        settings_modal_open.set(false);
+                                    },
+                                }
+                            }
+                        }
+                        div { class: "button-row",
+                            button {
+                                class: "button button-secondary",
+                                onclick: move |_| {
+                                    let mut next = settings_fields();
+                                    next.push(EditableField::new(""));
+                                    settings_fields.set(next);
+                                },
+                                "Add field"
+                            }
+                            button {
+                                class: "button button-primary",
+                                onclick: move |_| {
+                                    update_queue_settings.call((
+                                        queue_id,
+                                        settings_fields(),
+                                        settings_allow_guests(),
+                                    ));
+                                    settings_modal_open.set(false);
+                                },
+                                "Save settings"
+                            }
+                        }
                     }
                 }
             }
@@ -1757,6 +2052,16 @@ fn request_list_fields(fields: &[QueueField]) -> Vec<QueueField> {
         .collect()
 }
 
+fn editable_fields_from_queue(fields: &[QueueField]) -> Vec<EditableField> {
+    fields
+        .iter()
+        .map(|field| EditableField {
+            label: field.label.clone(),
+            required: field.required,
+        })
+        .collect()
+}
+
 fn request_field_value(field: &QueueField, entry: &AdminEntryView) -> String {
     entry
         .values
@@ -1773,6 +2078,33 @@ fn role_label(role: &AccountRole) -> &'static str {
         AccountRole::Admin => "Admin",
         AccountRole::User => "User",
     }
+}
+
+fn role_class(role: &AccountRole) -> &'static str {
+    match role {
+        AccountRole::SuperAdmin => "role-super",
+        AccountRole::Admin => "role-admin",
+        AccountRole::User => "role-user",
+    }
+}
+
+fn role_count(accounts: &[AccountView], role: &AccountRole) -> usize {
+    accounts
+        .iter()
+        .filter(|account| &account.role == role)
+        .count()
+}
+
+fn account_initials(name: &str) -> String {
+    let mut initials = name
+        .split_whitespace()
+        .filter_map(|part| part.chars().next())
+        .take(2)
+        .collect::<String>();
+    if initials.is_empty() {
+        initials.push('?');
+    }
+    initials.to_ascii_uppercase()
 }
 
 fn accounts_for_group(accounts: &[AccountView], role: &AccountRole) -> Vec<AccountView> {

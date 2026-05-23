@@ -210,6 +210,28 @@ async fn process_command(
 
             Ok(Some(queue_id))
         }
+        ClientMessage::UpdateQueueSettings {
+            admin_token,
+            queue_id,
+            fields,
+            allow_guests,
+        } => {
+            let mut store = state.store.write().await;
+            store.update_queue_settings(&admin_token, queue_id, fields, allow_guests)?;
+            store
+                .save_to_disk(&state.data_path)
+                .map_err(|error| format!("failed to save store: {error}"))?;
+            if let Some(state_view) = store.admin_state(&admin_token, Some(queue_id)) {
+                send_message(sender, &ServerMessage::QueueSettingsUpdated)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                send_message(sender, &ServerMessage::AdminState { state: state_view })
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+
+            Ok(Some(queue_id))
+        }
         ClientMessage::CreateAccount {
             admin_token,
             name,

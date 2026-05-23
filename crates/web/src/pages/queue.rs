@@ -214,221 +214,134 @@ pub fn QueuePage(queue_id: String) -> Element {
         if let Some(queue) = snapshot {
             div { class: "queue-page-layout",
                 section { class: "queue-hero-panel",
-                    p { class: "kicker", "Join Queue" }
+                    p { class: "kicker", "Queue" }
                     h1 { "{queue.name}" }
-                    if !queue.closed_at.is_some() {
-                        p { class: "landing-lede", "{queue.waiting_count} people are currently waiting." }
-                    }
-                    p { class: "hint",
-                        if let Some(closed_by_name) = queue.closed_by_name.clone() {
-                            "This queue has been closed by {closed_by_name}."
-                        } else if queue.allow_guests {
-                            "Guests can join this queue, or you can sign in with a user account."
+                    div { class: "queue-meta-line",
+                        if queue.closed_at.is_some() {
+                            span { class: "status-pill status-left", "Closed" }
                         } else {
-                            "This queue requires a user account before you can join."
+                            span { "{queue.waiting_count} waiting" }
                         }
                     }
 
                     if let Some(entry) = your_entry() {
-                        div { class: "ticket-panel",
-                            p { class: "ticket-label", "Current request" }
+                        div { class: "ticket-panel queue-status-block",
+                            p { class: "ticket-label", "Your request" }
                             p { class: "status-pill {status_class_suffix(&entry.status)}",
-                                "Status: {status_label(&entry.status)}"
+                                "{user_status_label(&entry)}"
                                 if let Some(position) = entry.position {
                                     " • position {position}"
                                 }
-                            }
-                            p { class: "hint",
-                                "Requester: {entry.requester_label}"
-                                if entry.is_guest {
-                                    " • guest"
-                                }
-                            }
-                            if let Some(claimed_by) = entry.claimed_by.clone() {
-                                p { class: "hint", "Handled by {claimed_by}" }
                             }
                             if queue.closed_at.is_some() {
                                 p { class: "feedback", "This queue has been closed." }
                             } else if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
                                 button { class: "button danger", onclick: leave_queue, "Leave queue" }
                             } else {
-                                p { class: "hint", "This outcome stays visible until you refresh or choose to rejoin." }
                                 button { class: "button button-primary", onclick: rejoin_queue, "Rejoin queue" }
                             }
                         }
+                    } else if queue.closed_at.is_some() {
+                        p { class: "hint", "This queue is no longer accepting requests." }
+                    } else if queue.allow_guests {
+                        p { class: "hint", "Join as a guest, or sign in first." }
                     } else {
-                        div { class: "ticket-panel muted-ticket",
-                            p { class: "ticket-label", "Ready to join" }
-                            p { class: "hint",
-                                if queue.closed_at.is_some() {
-                                    "This queue is no longer accepting requests."
-                                } else if let Some(user) = user_session() {
-                                    "Signed in as {user.email}"
-                                } else if queue.allow_guests {
-                                    "You can join as a guest or sign in with a user account."
-                                } else {
-                                    "Sign in with a user account to continue."
-                                }
-                            }
-                        }
+                        p { class: "hint", "Sign in to join this queue." }
                     }
                 }
 
-                section { class: "queue-form-panel",
-                    if queue.closed_at.is_some() {
-                        div { class: "panel-header",
-                            div {
-                                p { class: "kicker", "Queue Closed" }
-                                h2 { "No new requests" }
+                if queue.closed_at.is_none() && your_entry().is_none() {
+                    section { class: "queue-form-panel",
+                        if let Some(user) = user_session() {
+                            div { class: "signed-in-strip",
+                                span { "Signed in as {user.email}" }
+                                button { class: "button button-secondary", onclick: sign_out_user, "Sign out" }
                             }
-                        }
-                        p { class: "hint",
-                            if let Some(_closed_by_name) = queue.closed_by_name.clone() {
-                                "This queue has been closed."
-                            } else {
-                                "This queue was closed. Any outstanding request shown here will not move forward in this queue."
-                            }
-                        }
-                    } else if your_entry().is_none() {
-                        div { class: "join-panel-grid",
-                            section { class: "join-access-block",
-                                div { class: "panel-header compact-header",
-                                    div {
-                                        p { class: "kicker", "Access" }
-                                        h2 { "User login" }
+                        } else {
+                            div { class: "auth-inline-grid",
+                                div { class: "input-group",
+                                    label { class: "label", "Email" }
+                                    input {
+                                        class: "input",
+                                        value: "{auth_email}",
+                                        oninput: move |event| auth_email.set(event.value()),
+                                        onkeydown: move |event| {
+                                            if is_enter_key(&event) {
+                                                event.prevent_default();
+                                                login_user.call(());
+                                            }
+                                        },
+                                        placeholder: "user@example.com"
                                     }
                                 }
-
-                                if let Some(user) = user_session() {
-                                    div { class: "signed-in-strip",
-                                        div {
-                                            p { class: "ticket-label", "Signed in" }
-                                            p { class: "hint", "{user.name} • {user.email}" }
-                                        }
-                                        button { class: "button button-secondary", onclick: sign_out_user, "Sign out" }
-                                    }
-                                } else {
-                                    div { class: "auth-inline-grid",
-                                        div { class: "input-group",
-                                            label { class: "label", "User email" }
-                                            input {
-                                                class: "input",
-                                                value: "{auth_email}",
-                                                oninput: move |event| auth_email.set(event.value()),
-                                                onkeydown: move |event| {
-                                                    if is_enter_key(&event) {
-                                                        event.prevent_default();
-                                                        login_user.call(());
-                                                    }
-                                                },
-                                                placeholder: "user@example.com"
+                                div { class: "input-group",
+                                    label { class: "label", "Password" }
+                                    input {
+                                        class: "input",
+                                        r#type: "password",
+                                        value: "{auth_password}",
+                                        oninput: move |event| auth_password.set(event.value()),
+                                        onkeydown: move |event| {
+                                            if is_enter_key(&event) {
+                                                event.prevent_default();
+                                                login_user.call(());
                                             }
-                                        }
-                                        div { class: "input-group",
-                                            label { class: "label", "Password" }
-                                            input {
-                                                class: "input",
-                                                r#type: "password",
-                                                value: "{auth_password}",
-                                                oninput: move |event| auth_password.set(event.value()),
-                                                onkeydown: move |event| {
-                                                    if is_enter_key(&event) {
-                                                        event.prevent_default();
-                                                        login_user.call(());
-                                                    }
-                                                },
-                                                placeholder: "Password"
-                                            }
-                                        }
-                                        button { class: "button button-secondary auth-submit", onclick: move |_| login_user.call(()), "Sign in" }
-                                    }
-                                    if queue.allow_guests {
-                                        p { class: "hint", "Guest entry is available; sign-in is optional." }
-                                    }
-                                    if !auth_feedback().is_empty() {
-                                        p { class: "feedback", "{auth_feedback}" }
+                                        },
+                                        placeholder: "Password"
                                     }
                                 }
+                                button { class: "button button-secondary auth-submit", onclick: move |_| login_user.call(()), "Sign in" }
                             }
+                            if !queue.allow_guests {
+                                p { class: "hint", "An account is required for this queue." }
+                            }
+                            if !auth_feedback().is_empty() {
+                                p { class: "feedback", "{auth_feedback}" }
+                            }
+                        }
 
-                            if queue.allow_guests || user_session().is_some() {
-                                section { class: "join-form-block",
-                                    div { class: "panel-header compact-header",
-                                        div {
-                                            p { class: "kicker", "Request Form" }
-                                            h2 { "Enter the queue" }
-                                        }
-                                    }
-                                    div { class: "form-stack",
-                                        for field in queue.fields.iter().cloned() {
-                                            if !(user_session().is_some() && field.key == "name" && !field.required) {
-                                                div { class: "input-group",
-                                                    label { class: "label",
-                                                        "{field.label}"
-                                                        if !field.required {
-                                                            " optional"
-                                                        }
-                                                    }
-                                                    input {
-                                                        class: "input",
-                                                        value: "{form_values().get(&field.key).cloned().unwrap_or_default()}",
-                                                        oninput: move |event| {
-                                                            let mut next = form_values();
-                                                            next.insert(field.key.clone(), event.value());
-                                                            form_values.set(next);
-                                                        },
-                                                        onkeydown: move |event| {
-                                                            if is_enter_key(&event) {
-                                                                event.prevent_default();
-                                                                join_queue.call(());
-                                                            }
-                                                        },
-                                                        placeholder: "{field.label}"
-                                                    }
+                        if queue.allow_guests || user_session().is_some() {
+                            div { class: "form-stack",
+                                for field in queue.fields.iter().cloned() {
+                                    if !(user_session().is_some() && field.key == "name" && !field.required) {
+                                        div { class: "input-group",
+                                            label { class: "label",
+                                                "{field.label}"
+                                                if !field.required {
+                                                    " optional"
                                                 }
                                             }
+                                            input {
+                                                class: "input",
+                                                value: "{form_values().get(&field.key).cloned().unwrap_or_default()}",
+                                                oninput: move |event| {
+                                                    let mut next = form_values();
+                                                    next.insert(field.key.clone(), event.value());
+                                                    form_values.set(next);
+                                                },
+                                                onkeydown: move |event| {
+                                                    if is_enter_key(&event) {
+                                                        event.prevent_default();
+                                                        join_queue.call(());
+                                                    }
+                                                },
+                                                placeholder: "{field.label}"
+                                            }
                                         }
-                                        button { class: "button button-primary", onclick: move |_| join_queue.call(()), "Join queue" }
                                     }
                                 }
-                            } else {
-                                section { class: "join-form-block locked-block",
-                                    p { class: "ticket-label", "Account required" }
-                                    p { class: "hint", "Sign in above to unlock this queue form." }
-                                }
+                                button { class: "button button-primary", onclick: move |_| join_queue.call(()), "Join queue" }
                             }
+                        } else {
+                            p { class: "hint", "Sign in to unlock the form." }
                         }
-                    } else if let Some(entry) = your_entry() {
-                        div { class: "panel-header",
-                            div {
-                                p { class: "kicker", "Submitted Request" }
-                                h2 { "Your details" }
-                            }
-                        }
-                        div { class: "detail-list",
-                            div { class: "detail-row",
-                                span { class: "detail-key", "Account" }
-                                div { class: "detail-value",
-                                    "{entry.requester_label}"
-                                    if entry.is_guest {
-                                        " (guest)"
-                                    }
-                                }
-                            }
-                            for field in queue.fields.iter().cloned() {
-                                div { class: "detail-row",
-                                    span { class: "detail-key", "{field.label}" }
-                                    div { class: "detail-value",
-                                        "{entry.values.get(&field.key).cloned().unwrap_or_default()}"
-                                    }
-                                }
-                            }
-                        }
-                    }
 
-                    if !feedback().is_empty() {
-                        p { class: "feedback", "{feedback}" }
+                        if !feedback().is_empty() {
+                            p { class: "feedback", "{feedback}" }
+                        }
                     }
+                } else if !feedback().is_empty() {
+                    p { class: "feedback floating-feedback", "{feedback}" }
                 }
             }
         } else {
@@ -469,5 +382,14 @@ fn connection_class(status: SocketStatus) -> &'static str {
         SocketStatus::Connected => "connection-live",
         SocketStatus::Connecting => "connection-connecting",
         SocketStatus::Reconnecting => "connection-reconnecting",
+    }
+}
+
+fn user_status_label(entry: &UserEntryView) -> String {
+    match (&entry.status, entry.claimed_by.as_deref()) {
+        (QueueEntryStatus::Claimed, Some(name)) => format!("Claimed by {name}"),
+        (QueueEntryStatus::Resolved, Some(name)) => format!("Resolved by {name}"),
+        (QueueEntryStatus::Denied, Some(name)) => format!("Denied by {name}"),
+        _ => status_label(&entry.status).to_string(),
     }
 }

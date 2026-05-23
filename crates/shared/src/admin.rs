@@ -29,6 +29,8 @@ pub struct ArchivedQueueListItem {
     pub closed_at: String,
     pub closed_by_name: String,
     pub entry_count: usize,
+    pub fields: Vec<QueueField>,
+    pub entries: Vec<AdminEntryView>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -181,6 +181,10 @@ impl Store {
         if !admin.is_super_admin() {
             return Err("only the super admin can edit accounts".to_string());
         }
+        let editing_self = admin.id == account_id;
+        if editing_self && role != AccountRole::SuperAdmin {
+            return Err("you cannot demote your own super admin account".to_string());
+        }
 
         let normalized_name = name.trim().to_string();
         let normalized_email = normalize_email(&email)?;
@@ -276,6 +280,31 @@ impl Store {
             },
         );
         Ok(id)
+    }
+
+    pub fn update_queue_settings(
+        &mut self,
+        admin_token: &str,
+        queue_id: Uuid,
+        fields: Vec<QueueField>,
+        allow_guests: bool,
+    ) -> Result<(), String> {
+        let (admin_id, is_super_admin) = self
+            .admin_account(admin_token)
+            .map(|admin| (admin.id, admin.is_super_admin()))
+            .ok_or_else(|| "unknown admin session".to_string())?;
+        let fields = normalize_fields(fields)?;
+        let queue = self
+            .queues
+            .get_mut(&queue_id)
+            .ok_or_else(|| "queue not found".to_string())?;
+        if !(is_super_admin || queue.owner_account_id == admin_id) {
+            return Err("only the queue owner or super admin can edit this queue".to_string());
+        }
+
+        queue.fields = fields;
+        queue.allow_guests = allow_guests;
+        Ok(())
     }
 
     pub fn create_group(
@@ -456,6 +485,22 @@ impl Store {
                 closed_at: archive.closed_at.clone(),
                 closed_by_name: archive.closed_by_name.clone(),
                 entry_count: archive.queue.entries.len(),
+                fields: archive.queue.fields.clone(),
+                entries: archive
+                    .queue
+                    .entries
+                    .iter()
+                    .map(|entry| AdminEntryView {
+                        id: entry.id,
+                        status: entry.status.clone(),
+                        submitted_at: entry.submitted_at.clone(),
+                        claimed_by: entry.claimed_by.clone(),
+                        requester_label: entry.requester_label.clone(),
+                        requester_email: entry.requester_email.clone(),
+                        is_guest: entry.is_guest,
+                        values: entry.values.clone(),
+                    })
+                    .collect(),
             })
             .collect();
         archived_queues.sort_by(|left, right| right.closed_at.cmp(&left.closed_at));
@@ -638,7 +683,7 @@ impl Store {
             values.insert(field.key.clone(), value);
         }
 
-        let (_account_id, requester_label, requester_email, is_guest) =
+        let (_account_id, mut requester_label, requester_email, is_guest) =
             if let Some(requester) = requester {
                 requester
             } else if queue.allow_guests {
@@ -646,6 +691,14 @@ impl Store {
             } else {
                 return Err("this queue requires a user account".to_string());
             };
+
+        if let Some(name) = values
+            .get("name")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            requester_label = name.to_string();
+        }
 
         let id = Uuid::new_v4();
         let token = Uuid::new_v4().to_string();
@@ -1065,6 +1118,39 @@ mod tests {
     }
 
     #[test]
+    fn super_admin_cannot_demote_self() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login super admin");
+
+        assert!(store
+            .update_account(
+                &admin.token,
+                admin.account_id,
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                None,
+                AccountRole::Admin,
+            )
+            .is_err());
+        assert_eq!(
+            store
+                .accounts
+                .get(&admin.account_id)
+                .map(|account| &account.role),
+            Some(&AccountRole::SuperAdmin)
+        );
+    }
+
+    #[test]
     fn initial_setup_creates_exactly_one_super_admin() {
         let mut store = Store::default();
         assert!(store.needs_initial_setup());
@@ -1225,6 +1311,23 @@ mod tests {
                 .map(|archive| archive.queue.entries.len()),
             Some(1)
         );
+        let admin_state = store
+            .admin_state(&admin.token, None)
+            .expect("admin archive state");
+        let archived_queue = admin_state
+            .archived_queues
+            .iter()
+            .find(|queue| queue.summary.id == queue_id)
+            .expect("archived queue view");
+        assert_eq!(archived_queue.fields.len(), 1);
+        assert_eq!(archived_queue.entries.len(), 1);
+        assert_eq!(
+            archived_queue.entries[0]
+                .values
+                .get("name")
+                .map(String::as_str),
+            Some("Ada")
+        );
     }
 
     #[test]
@@ -1290,6 +1393,21 @@ mod tests {
             entry.values.get("subject"),
             Some(&"Compiler help".to_string())
         );
+
+        let mut values = BTreeMap::new();
+        values.insert("name".to_string(), "Ada L.".to_string());
+        values.insert("subject".to_string(), "Borrow checker".to_string());
+        store
+            .join_queue(queue_id, values, Some(&user.token))
+            .expect("join queue with custom name");
+
+        let entry = store
+            .queues
+            .get(&queue_id)
+            .and_then(|queue| queue.entries.get(1))
+            .expect("second queue entry");
+        assert_eq!(entry.requester_label, "Ada L.");
+        assert_eq!(entry.values.get("name"), Some(&"Ada L.".to_string()));
     }
 
     #[test]
@@ -1333,6 +1451,55 @@ mod tests {
             .expect("queue entry");
         assert_eq!(entry.requester_label, "Ada Lovelace");
         assert!(entry.values.is_empty());
+    }
+
+    #[test]
+    fn live_queue_settings_can_update_fields_and_guest_access() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                vec![QueueField {
+                    key: "subject".to_string(),
+                    label: "Subject".to_string(),
+                    required: true,
+                }],
+                false,
+            )
+            .expect("create queue");
+
+        store
+            .update_queue_settings(
+                &admin.token,
+                queue_id,
+                vec![QueueField {
+                    key: "topic".to_string(),
+                    label: "Topic".to_string(),
+                    required: false,
+                }],
+                true,
+            )
+            .expect("update queue settings");
+
+        let (queue_view, _) = store.user_view(queue_id, None).expect("user queue view");
+        assert!(queue_view.allow_guests);
+        assert_eq!(queue_view.fields[0].key, "topic");
+        assert!(!queue_view.fields[0].required);
+
+        store
+            .join_queue(queue_id, BTreeMap::new(), None)
+            .expect("guest can join with optional field empty");
     }
 
     #[test]
