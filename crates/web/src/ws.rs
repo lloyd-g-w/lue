@@ -18,6 +18,48 @@ pub enum SocketStatus {
     Reconnecting,
 }
 
+pub fn check_setup_socket(
+    mut on_setup_state: impl FnMut(bool) + 'static,
+    mut feedback: Signal<String>,
+) {
+    one_shot_socket(
+        ClientMessage::CheckSetup,
+        move |message| match message {
+            ServerMessage::SetupState { needs_setup } => on_setup_state(needs_setup),
+            ServerMessage::Error { message } => feedback.set(message),
+            _ => {}
+        },
+        feedback,
+    );
+}
+
+pub fn setup_super_admin_socket(
+    name: String,
+    email: String,
+    password: String,
+    mut on_logged_in: impl FnMut(AdminIdentityView) + 'static,
+    mut feedback: Signal<String>,
+) {
+    if name.trim().is_empty() || email.trim().is_empty() || password.trim().is_empty() {
+        feedback.set("Name, email, and password are required".to_string());
+        return;
+    }
+
+    one_shot_socket(
+        ClientMessage::SetupSuperAdmin {
+            name,
+            email,
+            password,
+        },
+        move |message| match message {
+            ServerMessage::AdminLoggedIn { admin } => on_logged_in(admin),
+            ServerMessage::Error { message } => feedback.set(message),
+            _ => {}
+        },
+        feedback,
+    );
+}
+
 pub fn login_admin_socket(
     email: String,
     password: String,
@@ -29,7 +71,7 @@ pub fn login_admin_socket(
         return;
     }
 
-    login_socket(
+    one_shot_socket(
         ClientMessage::LoginAdmin { email, password },
         move |message| match message {
             ServerMessage::AdminLoggedIn { admin } => on_logged_in(admin),
@@ -51,7 +93,7 @@ pub fn login_user_socket(
         return;
     }
 
-    login_socket(
+    one_shot_socket(
         ClientMessage::LoginUser { email, password },
         move |message| match message {
             ServerMessage::UserLoggedIn { user } => on_logged_in(user),
@@ -62,8 +104,8 @@ pub fn login_user_socket(
     );
 }
 
-fn login_socket(
-    login_message: ClientMessage,
+fn one_shot_socket(
+    initial_message: ClientMessage,
     mut on_message: impl FnMut(ServerMessage) + 'static,
     mut feedback: Signal<String>,
 ) {
@@ -74,7 +116,7 @@ fn login_socket(
 
     let ws_for_open = ws.clone();
     let on_open = Closure::<dyn FnMut()>::new(move || {
-        let _ = send_ws(&ws_for_open, &login_message);
+        let _ = send_ws(&ws_for_open, &initial_message);
     });
     ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
     on_open.forget();

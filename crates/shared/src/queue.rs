@@ -35,6 +35,8 @@ pub struct UserQueueView {
     pub fields: Vec<QueueField>,
     pub allow_guests: bool,
     pub waiting_count: usize,
+    pub closed_at: Option<String>,
+    pub closed_by_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

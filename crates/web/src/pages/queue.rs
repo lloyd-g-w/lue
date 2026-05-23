@@ -216,9 +216,13 @@ pub fn QueuePage(queue_id: String) -> Element {
                 section { class: "queue-hero-panel",
                     p { class: "kicker", "Join Queue" }
                     h1 { "{queue.name}" }
-                    p { class: "landing-lede", "{queue.waiting_count} people are currently waiting." }
+                    if !queue.closed_at.is_some() {
+                        p { class: "landing-lede", "{queue.waiting_count} people are currently waiting." }
+                    }
                     p { class: "hint",
-                        if queue.allow_guests {
+                        if let Some(closed_by_name) = queue.closed_by_name.clone() {
+                            "This queue has been closed by {closed_by_name}."
+                        } else if queue.allow_guests {
                             "Guests can join this queue, or you can sign in with a user account."
                         } else {
                             "This queue requires a user account before you can join."
@@ -243,7 +247,9 @@ pub fn QueuePage(queue_id: String) -> Element {
                             if let Some(claimed_by) = entry.claimed_by.clone() {
                                 p { class: "hint", "Handled by {claimed_by}" }
                             }
-                            if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
+                            if queue.closed_at.is_some() {
+                                p { class: "feedback", "This queue has been closed." }
+                            } else if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
                                 button { class: "button danger", onclick: leave_queue, "Leave queue" }
                             } else {
                                 p { class: "hint", "This outcome stays visible until you refresh or choose to rejoin." }
@@ -254,7 +260,9 @@ pub fn QueuePage(queue_id: String) -> Element {
                         div { class: "ticket-panel muted-ticket",
                             p { class: "ticket-label", "Ready to join" }
                             p { class: "hint",
-                                if let Some(user) = user_session() {
+                                if queue.closed_at.is_some() {
+                                    "This queue is no longer accepting requests."
+                                } else if let Some(user) = user_session() {
                                     "Signed in as {user.email}"
                                 } else if queue.allow_guests {
                                     "You can join as a guest or sign in with a user account."
@@ -267,7 +275,21 @@ pub fn QueuePage(queue_id: String) -> Element {
                 }
 
                 section { class: "queue-form-panel",
-                    if your_entry().is_none() {
+                    if queue.closed_at.is_some() {
+                        div { class: "panel-header",
+                            div {
+                                p { class: "kicker", "Queue Closed" }
+                                h2 { "No new requests" }
+                            }
+                        }
+                        p { class: "hint",
+                            if let Some(_closed_by_name) = queue.closed_by_name.clone() {
+                                "This queue has been closed."
+                            } else {
+                                "This queue was closed. Any outstanding request shown here will not move forward in this queue."
+                            }
+                        }
+                    } else if your_entry().is_none() {
                         div { class: "join-panel-grid",
                             section { class: "join-access-block",
                                 div { class: "panel-header compact-header",

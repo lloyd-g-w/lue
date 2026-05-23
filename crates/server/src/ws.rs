@@ -97,6 +97,35 @@ async fn process_command(
     sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
 ) -> Result<Option<Uuid>, String> {
     match command {
+        ClientMessage::CheckSetup => {
+            let store = state.store.read().await;
+            send_message(
+                sender,
+                &ServerMessage::SetupState {
+                    needs_setup: store.needs_initial_setup(),
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            Ok(None)
+        }
+        ClientMessage::SetupSuperAdmin {
+            name,
+            email,
+            password,
+        } => {
+            let mut store = state.store.write().await;
+            let admin = store.setup_initial_super_admin(name, email, password)?;
+            store
+                .save_to_disk(&state.data_path)
+                .map_err(|error| format!("failed to save store: {error}"))?;
+            admin_subscription.admin_token = Some(admin.token.clone());
+
+            send_message(sender, &ServerMessage::AdminLoggedIn { admin })
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(None)
+        }
         ClientMessage::LoginAdmin { email, password } => {
             let mut store = state.store.write().await;
             let admin = store.login_admin(email, password)?;

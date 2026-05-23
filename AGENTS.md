@@ -8,7 +8,7 @@ This is a Rust workspace for a Dioxus + Axum live queue app. Crates live under `
 - `crates/web`: Dioxus web frontend, routes, pages, components, client storage, and WebSocket client code.
 - `crates/shared`: Shared message types, admin models, and queue models used by both server and web.
 
-Persistent local data defaults to `data/store.json`. Configuration is read from `.env`; keep secrets and local credentials out of commits.
+Persistent data defaults to `data/store.json`. The initial super admin is created through the first-run setup form. Keep local credentials out of commits.
 
 ## Build, Test, and Development Commands
 
@@ -36,9 +36,9 @@ Run `cargo test --workspace` before submitting changes. For store or persistence
 
 ## Commit & Pull Request Guidelines
 
-Recent git history uses very short emoji-only commit subjects, so there is no strong local convention to preserve. Use concise, imperative commit messages that describe the change, for example `Add queue persistence test`.
+Recent git history has no strong local convention. Use concise, imperative commit messages, for example `Add queue persistence test`.
 
-Pull requests should include a short description, verification commands, linked issues when relevant, and screenshots or recordings for visible Dioxus UI changes. Note any `.env`, `DATA_PATH`, or migration considerations.
+Pull requests should include a short description, verification commands, linked issues when relevant, and screenshots or recordings for visible Dioxus UI changes. Note any setup, `DATA_PATH`, or migration considerations.
 
 ## Agent-Specific Instructions
 

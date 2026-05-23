@@ -4,13 +4,15 @@ use crate::models::AdminSessionRecord;
 use crate::route::{navigate, Route};
 use crate::storage::{load_admin_session, save_admin_session};
 use crate::view_helpers::is_enter_key;
-use crate::ws::login_admin_socket;
+use crate::ws::{check_setup_socket, login_admin_socket, setup_super_admin_socket};
 
 #[component]
 pub fn HomePage(route: Signal<Route>) -> Element {
+    let mut setup_name = use_signal(String::new);
     let mut admin_email = use_signal(String::new);
     let mut admin_password = use_signal(String::new);
     let feedback = use_signal(String::new);
+    let setup_required = use_signal(|| None::<bool>);
     let has_existing_session = load_admin_session().is_some();
 
     use_effect(move || {
@@ -21,6 +23,12 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                     queue_id: None,
                     request_id: None,
                 },
+            );
+        } else if setup_required().is_none() {
+            let mut setup_required = setup_required;
+            check_setup_socket(
+                move |needs_setup| setup_required.set(Some(needs_setup)),
+                feedback,
             );
         }
     });
@@ -55,11 +63,51 @@ pub fn HomePage(route: Signal<Route>) -> Element {
         })
     };
 
+    let setup = {
+        let setup_name = setup_name;
+        let admin_email = admin_email;
+        let admin_password = admin_password;
+        let mut feedback = feedback;
+        let route = route;
+        EventHandler::new(move |_| {
+            feedback.set("Creating super admin...".to_string());
+            setup_super_admin_socket(
+                setup_name(),
+                admin_email(),
+                admin_password(),
+                move |admin| {
+                    save_admin_session(&AdminSessionRecord {
+                        token: admin.token.clone(),
+                        name: admin.name,
+                        email: admin.email,
+                        is_super_admin: admin.is_super_admin,
+                    });
+                    navigate(
+                        route,
+                        Route::Admin {
+                            queue_id: None,
+                            request_id: None,
+                        },
+                    );
+                },
+                feedback,
+            );
+        })
+    };
+
     rsx! {
         if has_existing_session {
             section { class: "empty-stage",
                 h1 { "Opening dashboard" }
                 p { class: "lede", "Using your saved admin session." }
+            }
+        } else if setup_required().is_none() {
+            section { class: "empty-stage",
+                h1 { "Checking setup" }
+                p { class: "lede", "Connecting to the server." }
+                if !feedback().is_empty() {
+                    p { class: "feedback", "{feedback}" }
+                }
             }
         } else {
             div { class: "landing-layout",
@@ -98,7 +146,28 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                 div { class: "panel-header",
                     div {
                         p { class: "kicker", "Admin Access" }
-                        h2 { "Sign in" }
+                        if setup_required() == Some(true) {
+                            h2 { "Create super admin" }
+                        } else {
+                            h2 { "Sign in" }
+                        }
+                    }
+                }
+                if setup_required() == Some(true) {
+                    div { class: "input-group",
+                        label { class: "label", "Name" }
+                        input {
+                            class: "input",
+                            value: "{setup_name}",
+                            oninput: move |event| setup_name.set(event.value()),
+                            onkeydown: move |event| {
+                                if is_enter_key(&event) {
+                                    event.prevent_default();
+                                    setup.call(());
+                                }
+                            },
+                            placeholder: "Super Admin"
+                        }
                     }
                 }
                 div { class: "input-group",
@@ -110,7 +179,11 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                         onkeydown: move |event| {
                             if is_enter_key(&event) {
                                 event.prevent_default();
-                                login.call(());
+                                if setup_required() == Some(true) {
+                                    setup.call(());
+                                } else {
+                                    login.call(());
+                                }
                             }
                         },
                         placeholder: "admin@example.com"
@@ -126,14 +199,22 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                         onkeydown: move |event| {
                             if is_enter_key(&event) {
                                 event.prevent_default();
-                                login.call(());
+                                if setup_required() == Some(true) {
+                                    setup.call(());
+                                } else {
+                                    login.call(());
+                                }
                             }
                         },
                         placeholder: "Password"
                     }
                 }
                 div { class: "action-stack",
-                    button { class: "button button-primary", onclick: move |_| login.call(()), "Enter dashboard" }
+                    if setup_required() == Some(true) {
+                        button { class: "button button-primary", onclick: move |_| setup.call(()), "Create account" }
+                    } else {
+                        button { class: "button button-primary", onclick: move |_| login.call(()), "Enter dashboard" }
+                    }
                 }
                 if !feedback().is_empty() {
                     p { class: "feedback", "{feedback}" }

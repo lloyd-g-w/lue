@@ -15,6 +15,27 @@ use crate::password::{hash_password, verify_password};
 use crate::utils::{normalize_email, normalize_fields};
 
 impl Store {
+    pub fn needs_initial_setup(&self) -> bool {
+        !self
+            .accounts
+            .values()
+            .any(|account| account.role == AccountRole::SuperAdmin)
+    }
+
+    pub fn setup_initial_super_admin(
+        &mut self,
+        name: String,
+        email: String,
+        password: String,
+    ) -> Result<AdminIdentityView, String> {
+        if !self.needs_initial_setup() {
+            return Err("initial setup is already complete".to_string());
+        }
+
+        self.bootstrap_super_admin(name, email.clone(), password.clone())?;
+        self.login_admin(email, password)
+    }
+
     pub fn bootstrap_super_admin(
         &mut self,
         name: String,
@@ -26,10 +47,10 @@ impl Store {
         let password = password.trim().to_string();
 
         if name.is_empty() {
-            return Err("SUPER_ADMIN_NAME cannot be empty".to_string());
+            return Err("super admin name is required".to_string());
         }
         if password.is_empty() {
-            return Err("SUPER_ADMIN_PASSWORD cannot be empty".to_string());
+            return Err("super admin password is required".to_string());
         }
 
         let account_id = if let Some(existing_id) = self.account_email_index.get(&email).copied() {
@@ -518,7 +539,24 @@ impl Store {
         queue_id: Uuid,
         entry_token: Option<&str>,
     ) -> Option<(UserQueueView, Option<UserEntryView>)> {
-        let queue = self.queues.get(&queue_id)?;
+        if let Some(queue) = self.queues.get(&queue_id) {
+            return Some(self.user_queue_view(queue, entry_token, None));
+        }
+
+        let archive = self.archived_queues.get(&queue_id)?;
+        Some(self.user_queue_view(
+            &archive.queue,
+            entry_token,
+            Some((archive.closed_at.clone(), archive.closed_by_name.clone())),
+        ))
+    }
+
+    fn user_queue_view(
+        &self,
+        queue: &Queue,
+        entry_token: Option<&str>,
+        closed: Option<(String, String)>,
+    ) -> (UserQueueView, Option<UserEntryView>) {
         let your_entry = entry_token.and_then(|token| {
             queue
                 .entries
@@ -537,16 +575,22 @@ impl Store {
                 })
         });
 
-        Some((
+        let (closed_at, closed_by_name) = closed
+            .map(|(closed_at, closed_by_name)| (Some(closed_at), Some(closed_by_name)))
+            .unwrap_or((None, None));
+
+        (
             UserQueueView {
                 id: queue.id,
                 name: queue.name.clone(),
                 fields: queue.fields.clone(),
                 allow_guests: queue.allow_guests,
                 waiting_count: queue.waiting_count(),
+                closed_at,
+                closed_by_name,
             },
             your_entry,
-        ))
+        )
     }
 
     pub fn join_queue(
@@ -1021,6 +1065,31 @@ mod tests {
     }
 
     #[test]
+    fn initial_setup_creates_exactly_one_super_admin() {
+        let mut store = Store::default();
+        assert!(store.needs_initial_setup());
+
+        let admin = store
+            .setup_initial_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("setup super admin");
+
+        assert_eq!(admin.email, "super@example.com");
+        assert!(admin.is_super_admin);
+        assert!(!store.needs_initial_setup());
+        assert!(store
+            .setup_initial_super_admin(
+                "Other Admin".to_string(),
+                "other@example.com".to_string(),
+                "other-pass".to_string(),
+            )
+            .is_err());
+    }
+
+    #[test]
     fn admin_group_sharing_grants_queue_visibility() {
         let mut store = Store::default();
         store
@@ -1130,7 +1199,7 @@ mod tests {
             .expect("create queue");
         let mut values = BTreeMap::new();
         values.insert("name".to_string(), "Ada".to_string());
-        store
+        let entry_token = store
             .join_queue(queue_id, values, None)
             .expect("join queue");
 
@@ -1139,7 +1208,16 @@ mod tests {
             .expect("close queue");
 
         assert!(!store.queues.contains_key(&queue_id));
-        assert!(store.user_view(queue_id, None).is_none());
+        let (closed_queue, closed_entry) = store
+            .user_view(queue_id, Some(&entry_token))
+            .expect("closed queue remains visible to subscribed users");
+        assert_eq!(closed_queue.id, queue_id);
+        assert_eq!(closed_queue.closed_by_name.as_deref(), Some("Super Admin"));
+        assert!(closed_queue.closed_at.is_some());
+        assert_eq!(
+            closed_entry.map(|entry| entry.status),
+            Some(QueueEntryStatus::Pending)
+        );
         assert_eq!(
             store
                 .archived_queues

@@ -10,6 +10,12 @@ use crate::{
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum ClientMessage {
+    CheckSetup,
+    SetupSuperAdmin {
+        name: String,
+        email: String,
+        password: String,
+    },
     LoginAdmin {
         email: String,
         password: String,
@@ -108,6 +114,9 @@ pub enum ClientMessage {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum ServerMessage {
+    SetupState {
+        needs_setup: bool,
+    },
     AdminLoggedIn {
         admin: AdminIdentityView,
     },

@@ -8,7 +8,7 @@ This repository contains a small full-stack queue system:
 
 ## What it does
 
-- A super admin account is bootstrapped from `.env`.
+- The first deployment prompts you to create the initial super admin account.
 - The super admin can create `admin` and `user` email/password accounts from the dashboard.
 - An admin creates a queue with a queue name, any number of required fields, and an `allow guests` setting.
 - A user opens the queue link, signs in if required, or joins as a guest if that queue allows it.
@@ -21,14 +21,6 @@ Accounts, login sessions, queues, and queue entries are saved to disk as JSON so
 resume after a backend restart.
 
 ## Run locally
-
-1. Set the super admin credentials in `.env`:
-
-```bash
-SUPER_ADMIN_NAME=Super Admin
-SUPER_ADMIN_EMAIL=superadmin@example.com
-SUPER_ADMIN_PASSWORD=change-me
-```
 
 1. Start the backend:
 
@@ -43,6 +35,8 @@ dx serve --package web
 ```
 
 The frontend expects the backend WebSocket endpoint at `ws://127.0.0.1:3000/ws`.
+If the persistent store has no super admin yet, `/` shows the initial setup form. After that,
+the account is saved to the persistent store and future visits show the normal sign-in flow.
 
 Persistent server data is stored at `data/store.json` by default. Set `DATA_PATH` to use a
 different file:
@@ -60,5 +54,5 @@ DATA_PATH=/path/to/store.json cargo run -p server
 
 ## Notes
 
-- The `.env` super admin is bootstrapped on every server start and saved into the persistent store.
+- Initial setup is only available while the persistent store has no super admin account.
 - Passwords are stored as salted Argon2 hashes.

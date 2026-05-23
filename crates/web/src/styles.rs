@@ -114,7 +114,7 @@ a {
 .page-panel,
 .queue-workspace {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
 .sidebar-block,
@@ -163,7 +163,7 @@ h1,
 h2,
 h3,
 .page-title {
-  margin: 0;
+  margin: 6px 0;
   line-height: 1.08;
   letter-spacing: 0;
 }
@@ -509,7 +509,7 @@ code {
 .feedback {
   color: var(--danger);
   font-weight: 600;
-  margin: 0;
+  margin: 10px 0 0 0;
   padding: 0.9rem 1rem;
   border: 1px solid #e6c0c5;
   border-radius: 14px;
