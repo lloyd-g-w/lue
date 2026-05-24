@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use shared::{AccountRole, QueueEntryStatus, QueueField, QueueSummary};
+use shared::{AccountRole, QueueEntryStatus, QueueField, QueueSummary, WeeklySchedule};
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
@@ -53,6 +53,12 @@ pub struct Queue {
     pub id: Uuid,
     pub name: String,
     pub allow_guests: bool,
+    #[serde(default)]
+    pub is_public: bool,
+    #[serde(default)]
+    pub opens_at: Option<String>,
+    #[serde(default)]
+    pub weekly_schedule: Option<WeeklySchedule>,
     pub owner_account_id: Uuid,
     pub owner_name: String,
     #[serde(default)]
@@ -171,6 +177,9 @@ impl Queue {
             id: self.id,
             name: self.name.clone(),
             allow_guests: self.allow_guests,
+            is_public: self.is_public,
+            opens_at: self.opens_at.clone(),
+            weekly_schedule: self.weekly_schedule.clone(),
             waiting_count: self.waiting_count(),
             active_count: self.active_count(),
         }

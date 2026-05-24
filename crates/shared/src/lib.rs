@@ -10,7 +10,9 @@ pub use admin::{
     ArchivedQueueListItem, GroupView,
 };
 pub use messages::{ClientMessage, ServerMessage};
-pub use queue::{QueueEntryStatus, QueueField, QueueSummary, UserEntryView, UserQueueView};
+pub use queue::{
+    QueueEntryStatus, QueueField, QueueSummary, UserEntryView, UserQueueView, WeeklySchedule,
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum AccountRole {

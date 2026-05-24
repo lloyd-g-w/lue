@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use chrono::Utc;
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use shared::{
     AccountRole, AccountView, AdminEntryView, AdminIdentityView, AdminQueueListItem,
     AdminQueueView, AdminStateView, ArchivedQueueListItem, GroupView, QueueEntryStatus, QueueField,
-    UserEntryView, UserIdentityView, UserQueueView,
+    QueueSummary, UserEntryView, UserIdentityView, UserQueueView, WeeklySchedule,
 };
 use uuid::Uuid;
 
@@ -14,7 +14,20 @@ use crate::model::{
 use crate::password::{hash_password, verify_password};
 use crate::utils::{is_requester_name_key, normalize_email, normalize_fields};
 
-const REJOIN_COOLDOWN_SECS: i64 = 10;
+const REJOIN_COOLDOWN_SECS: i64 = 5;
+
+fn weekday_label(weekday: u8) -> &'static str {
+    match weekday {
+        0 => "Sunday",
+        1 => "Monday",
+        2 => "Tuesday",
+        3 => "Wednesday",
+        4 => "Thursday",
+        5 => "Friday",
+        6 => "Saturday",
+        _ => "Unknown",
+    }
+}
 
 impl Store {
     pub fn needs_initial_setup(&self) -> bool {
@@ -254,6 +267,9 @@ impl Store {
         name: String,
         fields: Vec<QueueField>,
         allow_guests: bool,
+        is_public: bool,
+        opens_at: Option<String>,
+        weekly_schedule: Option<WeeklySchedule>,
     ) -> Result<Uuid, String> {
         let admin = self
             .admin_account(admin_token)
@@ -265,6 +281,8 @@ impl Store {
         }
 
         let fields = normalize_fields(fields)?;
+        let opens_at = Self::normalize_opens_at(opens_at)?;
+        let weekly_schedule = Self::normalize_weekly_schedule(weekly_schedule)?;
 
         let id = Uuid::new_v4();
         self.queues.insert(
@@ -273,6 +291,9 @@ impl Store {
                 id,
                 name: normalized_name,
                 allow_guests,
+                is_public,
+                opens_at,
+                weekly_schedule,
                 owner_account_id: admin.id,
                 owner_name: admin.name.clone(),
                 shared_account_ids: Vec::new(),
@@ -290,12 +311,17 @@ impl Store {
         queue_id: Uuid,
         fields: Vec<QueueField>,
         allow_guests: bool,
+        is_public: bool,
+        opens_at: Option<String>,
+        weekly_schedule: Option<WeeklySchedule>,
     ) -> Result<(), String> {
         let (admin_id, is_super_admin) = self
             .admin_account(admin_token)
             .map(|admin| (admin.id, admin.is_super_admin()))
             .ok_or_else(|| "unknown admin session".to_string())?;
         let fields = normalize_fields(fields)?;
+        let opens_at = Self::normalize_opens_at(opens_at)?;
+        let weekly_schedule = Self::normalize_weekly_schedule(weekly_schedule)?;
         let queue = self
             .queues
             .get_mut(&queue_id)
@@ -306,6 +332,9 @@ impl Store {
 
         queue.fields = fields;
         queue.allow_guests = allow_guests;
+        queue.is_public = is_public;
+        queue.opens_at = opens_at;
+        queue.weekly_schedule = weekly_schedule;
         Ok(())
     }
 
@@ -587,6 +616,9 @@ impl Store {
         entry_token: Option<&str>,
     ) -> Option<(UserQueueView, Option<UserEntryView>)> {
         if let Some(queue) = self.queues.get(&queue_id) {
+            if !Self::queue_is_open(queue) {
+                return None;
+            }
             return Some(self.user_queue_view(queue, entry_token, None));
         }
 
@@ -634,6 +666,8 @@ impl Store {
                 name: queue.name.clone(),
                 fields: queue.fields.clone(),
                 allow_guests: queue.allow_guests,
+                opens_at: queue.opens_at.clone(),
+                weekly_schedule: queue.weekly_schedule.clone(),
                 waiting_count: queue.waiting_count(),
                 closed_at,
                 closed_by_name,
@@ -648,6 +682,78 @@ impl Store {
             .ok()?
             .with_timezone(&Utc);
         Some((left_at + chrono::Duration::seconds(REJOIN_COOLDOWN_SECS)).to_rfc3339())
+    }
+
+    fn normalize_opens_at(opens_at: Option<String>) -> Result<Option<String>, String> {
+        let Some(opens_at) = opens_at.map(|value| value.trim().to_string()) else {
+            return Ok(None);
+        };
+        if opens_at.is_empty() {
+            return Ok(None);
+        }
+
+        let opens_at = DateTime::parse_from_rfc3339(&opens_at)
+            .map_err(|error| format!("invalid queue opening time: {error}"))?
+            .with_timezone(&Utc);
+        Ok(Some(opens_at.to_rfc3339()))
+    }
+
+    fn normalize_weekly_schedule(
+        weekly_schedule: Option<WeeklySchedule>,
+    ) -> Result<Option<WeeklySchedule>, String> {
+        let Some(schedule) = weekly_schedule else {
+            return Ok(None);
+        };
+        if schedule.weekday > 6 {
+            return Err("weekly schedule day is invalid".to_string());
+        }
+        if schedule.minute_of_day >= 24 * 60 {
+            return Err("weekly schedule time is invalid".to_string());
+        }
+        Ok(Some(schedule))
+    }
+
+    fn queue_is_open(queue: &Queue) -> bool {
+        let now = Utc::now();
+        if let Some(opens_at) = queue.opens_at.as_deref() {
+            let is_past_one_time_open = DateTime::parse_from_rfc3339(opens_at)
+                .map(|opens_at| now >= opens_at.with_timezone(&Utc))
+                .unwrap_or(true);
+            if !is_past_one_time_open {
+                return false;
+            }
+        }
+
+        if let Some(schedule) = queue.weekly_schedule.as_ref() {
+            let weekday = now.weekday().num_days_from_sunday() as u8;
+            let minute_of_day = (now.hour() * 60 + now.minute()) as u16;
+            return weekday > schedule.weekday
+                || (weekday == schedule.weekday && minute_of_day >= schedule.minute_of_day);
+        }
+
+        true
+    }
+
+    fn queue_not_open_message(queue: &Queue) -> String {
+        if let Some(opens_at) = queue.opens_at.as_deref() {
+            if DateTime::parse_from_rfc3339(opens_at)
+                .map(|opens_at| Utc::now() < opens_at.with_timezone(&Utc))
+                .unwrap_or(false)
+            {
+                return format!("This queue opens at {opens_at}.");
+            }
+        }
+
+        if let Some(schedule) = queue.weekly_schedule.as_ref() {
+            return format!(
+                "This queue opens weekly on {} at {:02}:{:02} UTC.",
+                weekday_label(schedule.weekday),
+                schedule.minute_of_day / 60,
+                schedule.minute_of_day % 60
+            );
+        }
+
+        "This queue is not open yet.".to_string()
     }
 
     pub fn join_queue(
@@ -675,23 +781,35 @@ impl Store {
             .queues
             .get_mut(&queue_id)
             .ok_or_else(|| "queue not found".to_string())?;
+        if !Self::queue_is_open(queue) {
+            return Err(Self::queue_not_open_message(queue));
+        }
         let requester_account_id = requester
             .as_ref()
             .and_then(|(account_id, _, _, _)| *account_id);
         let now = Utc::now();
-        let existing_entry_index = if let Some(account_id) = requester_account_id {
-            queue
-                .entries
-                .iter()
-                .position(|entry| entry.requester_account_id == Some(account_id))
+        let active_entry_index = if let Some(account_id) = requester_account_id {
+            queue.entries.iter().position(|entry| {
+                entry.requester_account_id == Some(account_id)
+                    && matches!(
+                        entry.status,
+                        QueueEntryStatus::Pending | QueueEntryStatus::Claimed
+                    )
+            })
         } else if let Some(entry_token) = entry_token {
-            queue
-                .entries
-                .iter()
-                .position(|entry| entry.token == entry_token)
+            queue.entries.iter().position(|entry| {
+                entry.token == entry_token
+                    && matches!(
+                        entry.status,
+                        QueueEntryStatus::Pending | QueueEntryStatus::Claimed
+                    )
+            })
         } else {
             None
         };
+        if let Some(index) = active_entry_index {
+            return Ok(queue.entries[index].token.clone());
+        }
 
         for field in &queue.fields {
             let mut value = values
@@ -735,33 +853,32 @@ impl Store {
             }
         }
 
-        if let Some(index) = existing_entry_index {
-            let entry = queue.entries.get_mut(index).expect("entry index");
-            if entry.status == QueueEntryStatus::Left {
-                if let Some(left_at) = entry.left_at.as_deref() {
-                    let left_at = chrono::DateTime::parse_from_rfc3339(left_at)
-                        .map(|value| value.with_timezone(&Utc))
-                        .map_err(|error| format!("invalid leave timestamp: {error}"))?;
-                    let rejoin_at = left_at + chrono::Duration::seconds(REJOIN_COOLDOWN_SECS);
-                    if now < rejoin_at {
-                        let remaining = (rejoin_at - now).num_seconds().max(1);
-                        return Err(format!("Please wait {remaining} seconds before attempting to rejoin."));
-                    }
+        let left_entry_index = if let Some(account_id) = requester_account_id {
+            queue.entries.iter().rposition(|entry| {
+                entry.requester_account_id == Some(account_id)
+                    && entry.status == QueueEntryStatus::Left
+            })
+        } else if let Some(entry_token) = entry_token {
+            queue.entries.iter().position(|entry| {
+                entry.token == entry_token && entry.status == QueueEntryStatus::Left
+            })
+        } else {
+            None
+        };
+        if let Some(index) = left_entry_index {
+            let entry = queue.entries.get(index).expect("entry index");
+            if let Some(left_at) = entry.left_at.as_deref() {
+                let left_at = chrono::DateTime::parse_from_rfc3339(left_at)
+                    .map(|value| value.with_timezone(&Utc))
+                    .map_err(|error| format!("invalid leave timestamp: {error}"))?;
+                let rejoin_at = left_at + chrono::Duration::seconds(REJOIN_COOLDOWN_SECS);
+                if now < rejoin_at {
+                    let remaining = (rejoin_at - now).num_seconds().max(1);
+                    return Err(format!(
+                        "Please wait {remaining} seconds before attempting to rejoin."
+                    ));
                 }
-
-                entry.requester_account_id = requester_account_id;
-                entry.requester_label = requester_label;
-                entry.requester_email = requester_email;
-                entry.is_guest = is_guest;
-                entry.values = values;
-                entry.submitted_at = now.to_rfc3339();
-                entry.left_at = None;
-                entry.status = QueueEntryStatus::Pending;
-                entry.claimed_by = None;
-                return Ok(entry.token.clone());
             }
-
-            return Ok(entry.token.clone());
         }
 
         let id = Uuid::new_v4();
@@ -946,6 +1063,22 @@ impl Store {
             .collect();
         queue_ids.sort_by_key(|queue_id| self.queues.get(queue_id).map(|queue| queue.name.clone()));
         Some(queue_ids)
+    }
+
+    pub fn public_queues(&self) -> Vec<QueueSummary> {
+        let mut queues: Vec<QueueSummary> = self
+            .queues
+            .values()
+            .filter(|queue| queue.is_public && Self::queue_is_open(queue))
+            .map(Queue::summary)
+            .collect();
+        queues.sort_by_key(|queue| queue.name.clone());
+        queues
+    }
+
+    pub fn queue_unavailable_message(&self, queue_id: Uuid) -> Option<String> {
+        let queue = self.queues.get(&queue_id)?;
+        (!Self::queue_is_open(queue)).then(|| Self::queue_not_open_message(queue))
     }
 
     pub fn admin_identity(&self, admin_token: &str) -> Option<AdminIdentityView> {
@@ -1298,6 +1431,9 @@ mod tests {
                     required: true,
                 }],
                 true,
+                false,
+                None,
+                None,
             )
             .expect("create queue");
 
@@ -1349,12 +1485,15 @@ mod tests {
                     required: true,
                 }],
                 true,
+                false,
+                None,
+                None,
             )
             .expect("create queue");
         let mut values = BTreeMap::new();
         values.insert("name".to_string(), "Ada".to_string());
         let entry_token = store
-            .join_queue(queue_id, values, None)
+            .join_queue(queue_id, values, None, None)
             .expect("join queue");
 
         store
@@ -1423,6 +1562,18 @@ mod tests {
         let user = store
             .login_user("ada@example.com".to_string(), "ada-pass".to_string())
             .expect("login user");
+        store
+            .create_account(
+                &admin.token,
+                "Grace Hopper".to_string(),
+                "grace@example.com".to_string(),
+                "grace-pass".to_string(),
+                AccountRole::User,
+            )
+            .expect("create second user");
+        let second_user = store
+            .login_user("grace@example.com".to_string(), "grace-pass".to_string())
+            .expect("login second user");
 
         let queue_id = store
             .create_queue(
@@ -1441,13 +1592,16 @@ mod tests {
                     },
                 ],
                 false,
+                false,
+                None,
+                None,
             )
             .expect("create queue");
         let mut values = BTreeMap::new();
         values.insert("subject".to_string(), "Compiler help".to_string());
 
         store
-            .join_queue(queue_id, values, Some(&user.token))
+            .join_queue(queue_id, values, Some(&user.token), None)
             .expect("join queue");
 
         let entry = store
@@ -1463,10 +1617,10 @@ mod tests {
         );
 
         let mut values = BTreeMap::new();
-        values.insert("name".to_string(), "Ada L.".to_string());
+        values.insert("name".to_string(), "Grace H.".to_string());
         values.insert("subject".to_string(), "Borrow checker".to_string());
         store
-            .join_queue(queue_id, values, Some(&user.token))
+            .join_queue(queue_id, values, Some(&second_user.token), None)
             .expect("join queue with custom name");
 
         let entry = store
@@ -1474,8 +1628,8 @@ mod tests {
             .get(&queue_id)
             .and_then(|queue| queue.entries.get(1))
             .expect("second queue entry");
-        assert_eq!(entry.requester_label, "Ada L.");
-        assert_eq!(entry.values.get("name"), Some(&"Ada L.".to_string()));
+        assert_eq!(entry.requester_label, "Grace H.");
+        assert_eq!(entry.values.get("name"), Some(&"Grace H.".to_string()));
     }
 
     #[test]
@@ -1503,6 +1657,18 @@ mod tests {
         let user = store
             .login_user("ada@example.com".to_string(), "ada-pass".to_string())
             .expect("login user");
+        store
+            .create_account(
+                &admin.token,
+                "Grace Hopper".to_string(),
+                "grace@example.com".to_string(),
+                "grace-pass".to_string(),
+                AccountRole::User,
+            )
+            .expect("create second user");
+        let second_user = store
+            .login_user("grace@example.com".to_string(), "grace-pass".to_string())
+            .expect("login second user");
         let queue_id = store
             .create_queue(
                 &admin.token,
@@ -1513,11 +1679,14 @@ mod tests {
                     required: true,
                 }],
                 false,
+                false,
+                None,
+                None,
             )
             .expect("create queue");
 
         store
-            .join_queue(queue_id, BTreeMap::new(), Some(&user.token))
+            .join_queue(queue_id, BTreeMap::new(), Some(&user.token), None)
             .expect("join queue with inferred full name");
         let entry = store
             .queues
@@ -1531,16 +1700,16 @@ mod tests {
         );
 
         let mut values = BTreeMap::new();
-        values.insert("full_name".to_string(), "Ada L.".to_string());
+        values.insert("full_name".to_string(), "Grace H.".to_string());
         store
-            .join_queue(queue_id, values, Some(&user.token))
+            .join_queue(queue_id, values, Some(&second_user.token), None)
             .expect("join queue with custom full name");
         let entry = store
             .queues
             .get(&queue_id)
             .and_then(|queue| queue.entries.get(1))
             .expect("second queue entry");
-        assert_eq!(entry.requester_label, "Ada L.");
+        assert_eq!(entry.requester_label, "Grace H.");
     }
 
     #[test]
@@ -1570,11 +1739,19 @@ mod tests {
             .expect("login user");
 
         let queue_id = store
-            .create_queue(&admin.token, "Support".to_string(), Vec::new(), false)
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                Vec::new(),
+                false,
+                false,
+                None,
+                None,
+            )
             .expect("create queue");
 
         store
-            .join_queue(queue_id, BTreeMap::new(), Some(&user.token))
+            .join_queue(queue_id, BTreeMap::new(), Some(&user.token), None)
             .expect("join queue");
 
         let entry = store
@@ -1609,6 +1786,9 @@ mod tests {
                     required: true,
                 }],
                 false,
+                false,
+                None,
+                None,
             )
             .expect("create queue");
 
@@ -1622,6 +1802,9 @@ mod tests {
                     required: false,
                 }],
                 true,
+                false,
+                None,
+                None,
             )
             .expect("update queue settings");
 
@@ -1631,8 +1814,189 @@ mod tests {
         assert!(!queue_view.fields[0].required);
 
         store
-            .join_queue(queue_id, BTreeMap::new(), None)
+            .join_queue(queue_id, BTreeMap::new(), None, None)
             .expect("guest can join with optional field empty");
+    }
+
+    #[test]
+    fn public_queues_only_returns_public_active_queues() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+
+        let private_queue_id = store
+            .create_queue(
+                &admin.token,
+                "Private".to_string(),
+                Vec::new(),
+                true,
+                false,
+                None,
+                None,
+            )
+            .expect("create private queue");
+        let public_queue_id = store
+            .create_queue(
+                &admin.token,
+                "Public".to_string(),
+                Vec::new(),
+                true,
+                true,
+                None,
+                None,
+            )
+            .expect("create public queue");
+
+        let queues = store.public_queues();
+        assert_eq!(queues.len(), 1);
+        assert_eq!(queues[0].id, public_queue_id);
+        assert!(queues[0].is_public);
+
+        store
+            .update_queue_settings(
+                &admin.token,
+                private_queue_id,
+                Vec::new(),
+                true,
+                true,
+                None,
+                None,
+            )
+            .expect("make private queue public");
+        let queues = store.public_queues();
+        assert_eq!(queues.len(), 2);
+        assert_eq!(queues[0].name, "Private");
+        assert_eq!(queues[1].name, "Public");
+    }
+
+    #[test]
+    fn scheduled_queue_is_hidden_and_blocked_until_open() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+        let opens_at = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Scheduled".to_string(),
+                Vec::new(),
+                true,
+                true,
+                Some(opens_at.clone()),
+                None,
+            )
+            .expect("create scheduled queue");
+
+        assert!(store.public_queues().is_empty());
+        assert!(store.user_view(queue_id, None).is_none());
+        assert!(store.queue_unavailable_message(queue_id).is_some());
+        let error = store
+            .join_queue(queue_id, BTreeMap::new(), None, None)
+            .expect_err("scheduled queue cannot be joined early");
+        assert!(error.contains(&opens_at));
+
+        let past_opens_at = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+        store
+            .update_queue_settings(
+                &admin.token,
+                queue_id,
+                Vec::new(),
+                true,
+                true,
+                Some(past_opens_at),
+                None,
+            )
+            .expect("open scheduled queue");
+
+        assert_eq!(store.public_queues().len(), 1);
+        assert!(store.user_view(queue_id, None).is_some());
+        store
+            .join_queue(queue_id, BTreeMap::new(), None, None)
+            .expect("opened scheduled queue can be joined");
+    }
+
+    #[test]
+    fn weekly_scheduled_queue_reopens_on_schedule() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+        let now = Utc::now();
+        let weekday = now.weekday().num_days_from_sunday() as u8;
+        let current_minute = (now.hour() * 60 + now.minute()) as u16;
+        let future_minute = (current_minute + 1).min(23 * 60 + 59);
+
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Weekly".to_string(),
+                Vec::new(),
+                true,
+                true,
+                None,
+                Some(WeeklySchedule {
+                    weekday,
+                    minute_of_day: future_minute,
+                }),
+            )
+            .expect("create weekly scheduled queue");
+
+        if future_minute > current_minute {
+            assert!(store.public_queues().is_empty());
+            assert!(store.user_view(queue_id, None).is_none());
+            let error = store
+                .join_queue(queue_id, BTreeMap::new(), None, None)
+                .expect_err("weekly queue cannot be joined before opening time");
+            assert!(error.contains("weekly"));
+        }
+
+        store
+            .update_queue_settings(
+                &admin.token,
+                queue_id,
+                Vec::new(),
+                true,
+                true,
+                None,
+                Some(WeeklySchedule {
+                    weekday,
+                    minute_of_day: 0,
+                }),
+            )
+            .expect("move weekly schedule to an already-open time");
+
+        assert_eq!(store.public_queues().len(), 1);
+        let (queue_view, _) = store.user_view(queue_id, None).expect("user queue view");
+        assert_eq!(
+            queue_view.weekly_schedule.expect("weekly schedule").weekday,
+            weekday
+        );
+        store
+            .join_queue(queue_id, BTreeMap::new(), None, None)
+            .expect("weekly scheduled queue can be joined after opening time");
     }
 
     #[test]
@@ -1659,13 +2023,16 @@ mod tests {
                     required: true,
                 }],
                 true,
+                false,
+                None,
+                None,
             )
             .expect("create queue");
         let mut values = BTreeMap::new();
         values.insert("account".to_string(), "Ada".to_string());
 
         store
-            .join_queue(queue_id, values, None)
+            .join_queue(queue_id, values, None, None)
             .expect("join queue");
 
         let entry = store
@@ -1675,5 +2042,68 @@ mod tests {
             .expect("queue entry");
         assert_eq!(entry.requester_label, "Guest");
         assert_eq!(entry.values.get("account"), Some(&"Ada".to_string()));
+    }
+
+    #[test]
+    fn guest_rejoin_is_blocked_during_cooldown_then_creates_separate_request() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                Vec::new(),
+                true,
+                false,
+                None,
+                None,
+            )
+            .expect("create queue");
+
+        let entry_token = store
+            .join_queue(queue_id, BTreeMap::new(), None, None)
+            .expect("guest joins queue");
+        store
+            .leave_queue(queue_id, &entry_token)
+            .expect("guest leaves queue");
+
+        let (_, left_entry) = store
+            .user_view(queue_id, Some(&entry_token))
+            .expect("queue remains visible");
+        let left_entry = left_entry.expect("left entry remains visible by token");
+        assert_eq!(left_entry.status, QueueEntryStatus::Left);
+        assert!(left_entry.rejoin_after.is_some());
+
+        let error = store
+            .join_queue(queue_id, BTreeMap::new(), None, Some(&entry_token))
+            .expect_err("guest cannot immediately rejoin");
+        assert!(error.contains("Please wait"));
+        assert_eq!(
+            store.queues.get(&queue_id).map(|queue| queue.entries.len()),
+            Some(1)
+        );
+
+        let old_left_at = Utc::now() - chrono::Duration::seconds(REJOIN_COOLDOWN_SECS + 1);
+        let queue = store.queues.get_mut(&queue_id).expect("queue");
+        queue.entries[0].left_at = Some(old_left_at.to_rfc3339());
+
+        let new_token = store
+            .join_queue(queue_id, BTreeMap::new(), None, Some(&entry_token))
+            .expect("guest can rejoin after cooldown");
+        assert_ne!(new_token, entry_token);
+
+        let queue = store.queues.get(&queue_id).expect("queue");
+        assert_eq!(queue.entries.len(), 2);
+        assert_eq!(queue.entries[0].status, QueueEntryStatus::Left);
+        assert_eq!(queue.entries[1].status, QueueEntryStatus::Pending);
     }
 }

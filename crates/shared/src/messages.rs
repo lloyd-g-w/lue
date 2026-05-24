@@ -4,13 +4,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AccountRole, AdminIdentityView, AdminStateView, QueueField, UserEntryView, UserIdentityView,
-    UserQueueView,
+    AccountRole, AdminIdentityView, AdminStateView, QueueField, QueueSummary, UserEntryView,
+    UserIdentityView, UserQueueView, WeeklySchedule,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum ClientMessage {
     CheckSetup,
+    ListPublicQueues,
     SetupSuperAdmin {
         name: String,
         email: String,
@@ -33,12 +34,18 @@ pub enum ClientMessage {
         name: String,
         fields: Vec<QueueField>,
         allow_guests: bool,
+        is_public: bool,
+        opens_at: Option<String>,
+        weekly_schedule: Option<WeeklySchedule>,
     },
     UpdateQueueSettings {
         admin_token: String,
         queue_id: Uuid,
         fields: Vec<QueueField>,
         allow_guests: bool,
+        is_public: bool,
+        opens_at: Option<String>,
+        weekly_schedule: Option<WeeklySchedule>,
     },
     CreateAccount {
         admin_token: String,
@@ -148,6 +155,9 @@ pub enum ServerMessage {
     QueueState {
         queue: UserQueueView,
         your_entry: Option<UserEntryView>,
+    },
+    PublicQueues {
+        queues: Vec<QueueSummary>,
     },
     Info {
         message: String,

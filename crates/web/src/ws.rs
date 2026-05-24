@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use dioxus::prelude::*;
@@ -18,6 +18,24 @@ pub enum SocketStatus {
     Reconnecting,
 }
 
+#[derive(Clone)]
+pub struct ReconnectingSocket {
+    active: Rc<Cell<bool>>,
+    current_socket: Rc<RefCell<Option<WebSocket>>>,
+}
+
+impl ReconnectingSocket {
+    pub fn close(&self) {
+        self.active.set(false);
+        if let Some(socket) = self.current_socket.borrow_mut().take() {
+            socket.set_onopen(None);
+            socket.set_onmessage(None);
+            socket.set_onclose(None);
+            let _ = socket.close();
+        }
+    }
+}
+
 pub fn check_setup_socket(
     mut on_setup_state: impl FnMut(bool) + 'static,
     mut feedback: Signal<String>,
@@ -26,6 +44,21 @@ pub fn check_setup_socket(
         ClientMessage::CheckSetup,
         move |message| match message {
             ServerMessage::SetupState { needs_setup } => on_setup_state(needs_setup),
+            ServerMessage::Error { message } => feedback.set(message),
+            _ => {}
+        },
+        feedback,
+    );
+}
+
+pub fn list_public_queues_socket(
+    mut on_public_queues: impl FnMut(Vec<shared::QueueSummary>) + 'static,
+    mut feedback: Signal<String>,
+) {
+    one_shot_socket(
+        ClientMessage::ListPublicQueues,
+        move |message| match message {
+            ServerMessage::PublicQueues { queues } => on_public_queues(queues),
             ServerMessage::Error { message } => feedback.set(message),
             _ => {}
         },
@@ -137,7 +170,7 @@ pub fn connect_reconnecting_socket(
     on_message: impl FnMut(ServerMessage) + 'static,
     on_open: impl FnMut(WebSocket) + 'static,
     on_status: impl FnMut(SocketStatus) + 'static,
-) {
+) -> ReconnectingSocket {
     let on_message = Rc::new(RefCell::new(
         Box::new(on_message) as Box<dyn FnMut(ServerMessage)>
     ));
@@ -145,27 +178,42 @@ pub fn connect_reconnecting_socket(
     let on_status = Rc::new(RefCell::new(
         Box::new(on_status) as Box<dyn FnMut(SocketStatus)>
     ));
+    let connection = ReconnectingSocket {
+        active: Rc::new(Cell::new(true)),
+        current_socket: Rc::new(RefCell::new(None)),
+    };
 
-    connect_reconnecting_attempt(on_message, on_open, on_status);
+    connect_reconnecting_attempt(on_message, on_open, on_status, connection.clone());
+    connection
 }
 
 fn connect_reconnecting_attempt(
     on_message: Rc<RefCell<Box<dyn FnMut(ServerMessage)>>>,
     on_open: Rc<RefCell<Box<dyn FnMut(WebSocket)>>>,
     on_status: Rc<RefCell<Box<dyn FnMut(SocketStatus)>>>,
+    connection: ReconnectingSocket,
 ) {
+    if !connection.active.get() {
+        return;
+    }
+
     (on_status.borrow_mut())(SocketStatus::Connecting);
 
     let Ok(ws) = WebSocket::new(&backend_ws_url()) else {
         (on_status.borrow_mut())(SocketStatus::Reconnecting);
-        schedule_reconnect(on_message, on_open, on_status);
+        schedule_reconnect(on_message, on_open, on_status, connection);
         return;
     };
+    *connection.current_socket.borrow_mut() = Some(ws.clone());
 
     let on_open_callback = on_open.clone();
     let on_status_callback = on_status.clone();
+    let open_connection = connection.clone();
     let ws_for_open = ws.clone();
     let open_handler = Closure::<dyn FnMut()>::new(move || {
+        if !open_connection.active.get() {
+            return;
+        }
         (on_status_callback.borrow_mut())(SocketStatus::Connected);
         (on_open_callback.borrow_mut())(ws_for_open.clone());
     });
@@ -173,7 +221,11 @@ fn connect_reconnecting_attempt(
     open_handler.forget();
 
     let on_message_callback = on_message.clone();
+    let message_connection = connection.clone();
     let message_handler = Closure::<dyn FnMut(MessageEvent)>::new(move |event| {
+        if !message_connection.active.get() {
+            return;
+        }
         if let Some(text) = extract_ws_text(event) {
             if let Ok(message) = serde_json::from_str::<ServerMessage>(&text) {
                 (on_message_callback.borrow_mut())(message);
@@ -186,12 +238,17 @@ fn connect_reconnecting_attempt(
     let reconnect_message = on_message.clone();
     let reconnect_open = on_open.clone();
     let reconnect_status = on_status.clone();
+    let close_connection = connection.clone();
     let close_handler = Closure::<dyn FnMut()>::new(move || {
+        if !close_connection.active.get() {
+            return;
+        }
         (reconnect_status.borrow_mut())(SocketStatus::Reconnecting);
         schedule_reconnect(
             reconnect_message.clone(),
             reconnect_open.clone(),
             reconnect_status.clone(),
+            close_connection.clone(),
         );
     });
     ws.set_onclose(Some(close_handler.as_ref().unchecked_ref()));
@@ -202,9 +259,17 @@ fn schedule_reconnect(
     on_message: Rc<RefCell<Box<dyn FnMut(ServerMessage)>>>,
     on_open: Rc<RefCell<Box<dyn FnMut(WebSocket)>>>,
     on_status: Rc<RefCell<Box<dyn FnMut(SocketStatus)>>>,
+    connection: ReconnectingSocket,
 ) {
     let reconnect_handler = Closure::<dyn FnMut()>::new(move || {
-        connect_reconnecting_attempt(on_message.clone(), on_open.clone(), on_status.clone());
+        if connection.active.get() {
+            connect_reconnecting_attempt(
+                on_message.clone(),
+                on_open.clone(),
+                on_status.clone(),
+                connection.clone(),
+            );
+        }
     });
 
     if let Some(window) = window() {

@@ -109,6 +109,18 @@ async fn process_command(
             .map_err(|error| error.to_string())?;
             Ok(None)
         }
+        ClientMessage::ListPublicQueues => {
+            let store = state.store.read().await;
+            send_message(
+                sender,
+                &ServerMessage::PublicQueues {
+                    queues: store.public_queues(),
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            Ok(None)
+        }
         ClientMessage::SetupSuperAdmin {
             name,
             email,
@@ -189,9 +201,20 @@ async fn process_command(
             name,
             fields,
             allow_guests,
+            is_public,
+            opens_at,
+            weekly_schedule,
         } => {
             let mut store = state.store.write().await;
-            let queue_id = store.create_queue(&admin_token, name, fields, allow_guests)?;
+            let queue_id = store.create_queue(
+                &admin_token,
+                name,
+                fields,
+                allow_guests,
+                is_public,
+                opens_at,
+                weekly_schedule,
+            )?;
             store
                 .save_to_disk(&state.data_path)
                 .map_err(|error| format!("failed to save store: {error}"))?;
@@ -215,9 +238,20 @@ async fn process_command(
             queue_id,
             fields,
             allow_guests,
+            is_public,
+            opens_at,
+            weekly_schedule,
         } => {
             let mut store = state.store.write().await;
-            store.update_queue_settings(&admin_token, queue_id, fields, allow_guests)?;
+            store.update_queue_settings(
+                &admin_token,
+                queue_id,
+                fields,
+                allow_guests,
+                is_public,
+                opens_at,
+                weekly_schedule,
+            )?;
             store
                 .save_to_disk(&state.data_path)
                 .map_err(|error| format!("failed to save store: {error}"))?;
@@ -463,6 +497,9 @@ async fn process_command(
             user_token,
         } => {
             let store = state.store.read().await;
+            if let Some(message) = store.queue_unavailable_message(queue_id) {
+                return Err(message);
+            }
             let Some((queue, your_entry)) = store.user_view(queue_id, entry_token.as_deref())
             else {
                 return Err("unknown queue".to_string());
@@ -516,9 +553,11 @@ async fn process_command(
                 .save_to_disk(&state.data_path)
                 .map_err(|error| format!("failed to save store: {error}"))?;
             queue_subscription.queue_id = Some(queue_id);
-            queue_subscription.entry_token = None;
+            queue_subscription.entry_token = Some(entry_token);
 
-            if let Some((queue, your_entry)) = store.user_view(queue_id, None) {
+            if let Some((queue, your_entry)) =
+                store.user_view(queue_id, queue_subscription.entry_token.as_deref())
+            {
                 send_message(sender, &ServerMessage::QueueState { queue, your_entry })
                     .await
                     .map_err(|error| error.to_string())?;

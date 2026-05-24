@@ -11,6 +11,12 @@ pub struct QueueField {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WeeklySchedule {
+    pub weekday: u8,
+    pub minute_of_day: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum QueueEntryStatus {
     Pending,
     Claimed,
@@ -24,6 +30,9 @@ pub struct QueueSummary {
     pub id: Uuid,
     pub name: String,
     pub allow_guests: bool,
+    pub is_public: bool,
+    pub opens_at: Option<String>,
+    pub weekly_schedule: Option<WeeklySchedule>,
     pub waiting_count: usize,
     pub active_count: usize,
 }
@@ -34,6 +43,8 @@ pub struct UserQueueView {
     pub name: String,
     pub fields: Vec<QueueField>,
     pub allow_guests: bool,
+    pub opens_at: Option<String>,
+    pub weekly_schedule: Option<WeeklySchedule>,
     pub waiting_count: usize,
     pub closed_at: Option<String>,
     pub closed_by_name: Option<String>,

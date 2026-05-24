@@ -1,7 +1,10 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use dioxus::prelude::*;
 use shared::{
     AccountRole, AccountView, AdminEntryView, AdminQueueView, AdminStateView, ClientMessage,
-    GroupView, QueueEntryStatus, QueueField, ServerMessage,
+    GroupView, QueueEntryStatus, QueueField, QueueSummary, ServerMessage,
 };
 use uuid::Uuid;
 use web_sys::WebSocket;
@@ -9,8 +12,12 @@ use web_sys::WebSocket;
 use crate::models::{AccountDraft, EditableField, GroupDraft};
 use crate::route::{frontend_url, navigate, Route};
 use crate::storage::{clear_admin_session, load_admin_session};
-use crate::view_helpers::{format_timestamp, is_enter_key, slugify, status_class, status_label};
-use crate::ws::{connect_reconnecting_socket, send_ws, SocketStatus};
+use crate::view_helpers::{
+    format_timestamp, is_enter_key, local_datetime_to_rfc3339, local_weekly_to_utc,
+    rfc3339_to_local_datetime, slugify, status_class, status_label, utc_weekly_to_local,
+    weekday_name, weekly_schedule_label,
+};
+use crate::ws::{connect_reconnecting_socket, send_ws, ReconnectingSocket, SocketStatus};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AdminSection {
@@ -54,11 +61,25 @@ pub fn AdminPage(
     let socket = use_signal(|| None::<WebSocket>);
     let queue_name = use_signal(String::new);
     let queue_allow_guests = use_signal(|| false);
+    let queue_is_public = use_signal(|| false);
+    let queue_schedule_mode = use_signal(|| "none".to_string());
+    let queue_opens_at = use_signal(String::new);
+    let queue_weekly_day = use_signal(|| 1u8);
+    let queue_weekly_time = use_signal(|| "09:00".to_string());
     let fields = use_signal(Vec::<EditableField>::new);
     let account_draft = use_signal(AccountDraft::default);
     let group_draft = use_signal(GroupDraft::default);
     let share_account_ids = use_signal(Vec::<Uuid>::new);
     let share_group_ids = use_signal(Vec::<Uuid>::new);
+    let connection_handle = use_hook(|| Rc::new(RefCell::new(None::<ReconnectingSocket>)));
+    {
+        let connection_handle = connection_handle.clone();
+        use_drop(move || {
+            if let Some(connection) = connection_handle.borrow_mut().take() {
+                connection.close();
+            }
+        });
+    }
 
     let admin_token = admin_session.token.clone();
     let admin_label = admin_session.name.clone();
@@ -74,8 +95,9 @@ pub fn AdminPage(
         let mut share_group_ids = share_group_ids;
         let mut socket = socket;
         let admin_token = admin_token.clone();
+        let connection_handle = connection_handle.clone();
 
-        connect_reconnecting_socket(
+        let connection = connect_reconnecting_socket(
             move |message| match message {
                 ServerMessage::AdminState { state } => {
                     if let Some(queue) = state.selected_queue.as_ref() {
@@ -139,12 +161,21 @@ pub fn AdminPage(
                 }
             },
         );
+        let previous_connection = connection_handle.borrow_mut().replace(connection);
+        if let Some(previous_connection) = previous_connection {
+            previous_connection.close();
+        }
     });
 
     let create_queue = {
         let queue_name = queue_name;
         let fields = fields;
         let queue_allow_guests = queue_allow_guests;
+        let queue_is_public = queue_is_public;
+        let queue_schedule_mode = queue_schedule_mode;
+        let queue_opens_at = queue_opens_at;
+        let queue_weekly_day = queue_weekly_day;
+        let queue_weekly_time = queue_weekly_time;
         let socket = socket;
         let mut feedback = feedback;
         let admin_token = admin_session.token.clone();
@@ -170,6 +201,13 @@ pub fn AdminPage(
                         name: queue_name(),
                         fields: field_values,
                         allow_guests: queue_allow_guests(),
+                        is_public: queue_is_public(),
+                        opens_at: scheduled_opens_at(&queue_schedule_mode(), &queue_opens_at()),
+                        weekly_schedule: scheduled_weekly(
+                            &queue_schedule_mode(),
+                            queue_weekly_day(),
+                            &queue_weekly_time(),
+                        ),
                     },
                 );
             } else {
@@ -184,7 +222,14 @@ pub fn AdminPage(
         let mut feedback = feedback;
         let admin_token = admin_session.token.clone();
         EventHandler::new(
-            move |(queue_id, fields, allow_guests): (Uuid, Vec<EditableField>, bool)| {
+            move |(queue_id, fields, allow_guests, is_public, opens_at, weekly_schedule): (
+                Uuid,
+                Vec<EditableField>,
+                bool,
+                bool,
+                Option<String>,
+                Option<shared::WeeklySchedule>,
+            )| {
                 let field_values: Vec<QueueField> = fields
                     .iter()
                     .map(|field| {
@@ -206,6 +251,9 @@ pub fn AdminPage(
                             queue_id,
                             fields: field_values,
                             allow_guests,
+                            is_public,
+                            opens_at,
+                            weekly_schedule,
                         },
                     );
                 } else {
@@ -579,6 +627,11 @@ pub fn AdminPage(
                             selected_entry,
                             queue_name,
                             queue_allow_guests,
+                            queue_is_public,
+                            queue_schedule_mode,
+                            queue_opens_at,
+                            queue_weekly_day,
+                            queue_weekly_time,
                             fields,
                             account_draft,
                             group_draft,
@@ -627,13 +680,25 @@ fn render_admin_page(
     selected_entry: Option<AdminEntryView>,
     queue_name: Signal<String>,
     queue_allow_guests: Signal<bool>,
+    queue_is_public: Signal<bool>,
+    queue_schedule_mode: Signal<String>,
+    queue_opens_at: Signal<String>,
+    queue_weekly_day: Signal<u8>,
+    queue_weekly_time: Signal<String>,
     fields: Signal<Vec<EditableField>>,
     account_draft: Signal<AccountDraft>,
     group_draft: Signal<GroupDraft>,
     share_account_ids: Signal<Vec<Uuid>>,
     share_group_ids: Signal<Vec<Uuid>>,
     create_queue: EventHandler<()>,
-    update_queue_settings: EventHandler<(Uuid, Vec<EditableField>, bool)>,
+    update_queue_settings: EventHandler<(
+        Uuid,
+        Vec<EditableField>,
+        bool,
+        bool,
+        Option<String>,
+        Option<shared::WeeklySchedule>,
+    )>,
     create_account: EventHandler<()>,
     create_group: EventHandler<()>,
     update_account: EventHandler<Uuid>,
@@ -660,6 +725,11 @@ fn render_admin_page(
                 NewQueuePage {
                     queue_name,
                     queue_allow_guests,
+                    queue_is_public,
+                    queue_schedule_mode,
+                    queue_opens_at,
+                    queue_weekly_day,
+                    queue_weekly_time,
                     fields,
                     create_queue,
                 }
@@ -804,12 +874,23 @@ fn AdminNav(
 fn NewQueuePage(
     queue_name: Signal<String>,
     queue_allow_guests: Signal<bool>,
+    queue_is_public: Signal<bool>,
+    queue_schedule_mode: Signal<String>,
+    queue_opens_at: Signal<String>,
+    queue_weekly_day: Signal<u8>,
+    queue_weekly_time: Signal<String>,
     fields: Signal<Vec<EditableField>>,
     create_queue: EventHandler<()>,
 ) -> Element {
     let mut queue_name = queue_name;
     let mut queue_allow_guests = queue_allow_guests;
+    let mut queue_is_public = queue_is_public;
+    let queue_schedule_mode = queue_schedule_mode;
+    let queue_opens_at = queue_opens_at;
+    let queue_weekly_day = queue_weekly_day;
+    let queue_weekly_time = queue_weekly_time;
     let mut fields = fields;
+    let mut schedule_modal_open = use_signal(|| false);
 
     rsx! {
         section { class: "table-page-section split-view-section create-queue-section",
@@ -819,16 +900,34 @@ fn NewQueuePage(
                     h2 { "New queue" }
                     p { class: "lede", "Set up the public join form and access mode before sharing a queue link." }
                 }
-                label { class: "access-switch",
-                    input {
-                        r#type: "checkbox",
-                        checked: "{queue_allow_guests}",
-                        oninput: move |event| queue_allow_guests.set(event.checked())
+                div { class: "button-row",
+                    label { class: "access-switch",
+                        input {
+                            r#type: "checkbox",
+                            checked: "{queue_allow_guests}",
+                            oninput: move |event| queue_allow_guests.set(event.checked())
+                        }
+                        span { class: "switch-track",
+                            span { class: "switch-thumb" }
+                        }
+                        span { class: "switch-label", "Guests" }
                     }
-                    span { class: "switch-track",
-                        span { class: "switch-thumb" }
+                    label { class: "access-switch",
+                        input {
+                            r#type: "checkbox",
+                            checked: "{queue_is_public}",
+                            oninput: move |event| queue_is_public.set(event.checked())
+                        }
+                        span { class: "switch-track",
+                            span { class: "switch-thumb" }
+                        }
+                        span { class: "switch-label", "Public" }
                     }
-                    span { class: "switch-label", "Guests" }
+                    button {
+                        class: "button button-secondary",
+                        onclick: move |_| schedule_modal_open.set(true),
+                        "{schedule_button_label(&queue_schedule_mode(), &queue_opens_at(), queue_weekly_day(), &queue_weekly_time())}"
+                    }
                 }
             }
             div { class: "form-stack wide-form create-queue-form",
@@ -918,6 +1017,133 @@ fn NewQueuePage(
                         "Add field"
                     }
                     button { class: "button button-primary", onclick: move |_| create_queue.call(()), "Create queue" }
+                }
+            }
+            if schedule_modal_open() {
+                ScheduleModal {
+                    mode: queue_schedule_mode,
+                    opens_at: queue_opens_at,
+                    weekly_day: queue_weekly_day,
+                    weekly_time: queue_weekly_time,
+                    on_close: move |_| schedule_modal_open.set(false),
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ScheduleModal(
+    mode: Signal<String>,
+    opens_at: Signal<String>,
+    weekly_day: Signal<u8>,
+    weekly_time: Signal<String>,
+    on_close: EventHandler<()>,
+) -> Element {
+    let mut mode = mode;
+    let mut opens_at = opens_at;
+    let mut weekly_day = weekly_day;
+    let mut weekly_time = weekly_time;
+
+    rsx! {
+        div { class: "modal-backdrop",
+            div { class: "modal-panel form-stack schedule-panel",
+                div { class: "panel-header",
+                    div {
+                        p { class: "kicker", "Schedule" }
+                        h2 { "Queue opening" }
+                    }
+                    button {
+                        class: "action-button",
+                        onclick: move |_| on_close.call(()),
+                        "Close"
+                    }
+                }
+                div { class: "schedule-options",
+                    label { class: if mode() == "none" { "schedule-option schedule-option-active" } else { "schedule-option" },
+                        input {
+                            r#type: "radio",
+                            name: "schedule-mode",
+                            checked: "{mode() == \"none\"}",
+                            oninput: move |_| mode.set("none".to_string())
+                        }
+                        span { "No schedule" }
+                    }
+                    label { class: if mode() == "once" { "schedule-option schedule-option-active" } else { "schedule-option" },
+                        input {
+                            r#type: "radio",
+                            name: "schedule-mode",
+                            checked: "{mode() == \"once\"}",
+                            oninput: move |_| mode.set("once".to_string())
+                        }
+                        span { "Open once" }
+                    }
+                    label { class: if mode() == "weekly" { "schedule-option schedule-option-active" } else { "schedule-option" },
+                        input {
+                            r#type: "radio",
+                            name: "schedule-mode",
+                            checked: "{mode() == \"weekly\"}",
+                            oninput: move |_| mode.set("weekly".to_string())
+                        }
+                        span { "Open weekly" }
+                    }
+                }
+                if mode() == "once" {
+                    div { class: "input-group",
+                        label { class: "label", "Opening time" }
+                        input {
+                            class: "input",
+                            r#type: "datetime-local",
+                            value: "{opens_at}",
+                            oninput: move |event| opens_at.set(event.value())
+                        }
+                    }
+                } else if mode() == "weekly" {
+                    div { class: "schedule-grid",
+                        div { class: "input-group",
+                            label { class: "label", "Day" }
+                            select {
+                                class: "input",
+                                value: "{weekly_day}",
+                                oninput: move |event| {
+                                    if let Ok(day) = event.value().parse::<u8>() {
+                                        weekly_day.set(day);
+                                    }
+                                },
+                                for day in 0u8..=6 {
+                                    option { value: "{day}", "{weekday_name(day)}" }
+                                }
+                            }
+                        }
+                        div { class: "input-group",
+                            label { class: "label", "Time" }
+                            input {
+                                class: "input",
+                                r#type: "time",
+                                value: "{weekly_time}",
+                                oninput: move |event| weekly_time.set(event.value())
+                            }
+                        }
+                    }
+                } else {
+                    p { class: "hint", "The queue is available as soon as it is created." }
+                }
+                div { class: "button-row",
+                    button {
+                        class: "button button-secondary",
+                        onclick: move |_| {
+                            mode.set("none".to_string());
+                            opens_at.set(String::new());
+                            weekly_day.set(1);
+                            weekly_time.set("09:00".to_string());
+                        },
+                        "Clear schedule"
+                    }
+                    button {
+                        class: "button button-primary",
+                        onclick: move |_| on_close.call(()),
+                        "Done"
+                    }
                 }
             }
         }
@@ -1448,10 +1674,21 @@ fn QueueIndexPage(route: Signal<Route>, state: AdminStateView) -> Element {
                                     td { "{queue.summary.name}" }
                                     td { "{queue.owner_name}" }
                                     td {
+                                        if queue.summary.is_public {
+                                            span { class: "table-inline-note", "Public" }
+                                            " "
+                                        }
                                         if queue.summary.allow_guests {
                                             "Guests allowed"
                                         } else {
                                             "Accounts only"
+                                        }
+                                        if let Some(opens_at) = queue.summary.opens_at.as_deref() {
+                                            br {}
+                                            span { class: "row-meta", "Opens {format_timestamp(opens_at)}" }
+                                        } else if let Some(schedule) = queue.summary.weekly_schedule.as_ref() {
+                                            br {}
+                                            span { class: "row-meta", "{weekly_schedule_label(schedule)}" }
                                         }
                                     }
                                     td { "{queue.summary.waiting_count}" }
@@ -1585,7 +1822,14 @@ fn QueueRequestsPage(
     share_account_ids: Signal<Vec<Uuid>>,
     share_group_ids: Signal<Vec<Uuid>>,
     update_queue_sharing: EventHandler<Uuid>,
-    update_queue_settings: EventHandler<(Uuid, Vec<EditableField>, bool)>,
+    update_queue_settings: EventHandler<(
+        Uuid,
+        Vec<EditableField>,
+        bool,
+        bool,
+        Option<String>,
+        Option<shared::WeeklySchedule>,
+    )>,
     close_queue: EventHandler<Uuid>,
     claim_entry: EventHandler<Uuid>,
     unclaim_entry: EventHandler<Uuid>,
@@ -1597,7 +1841,16 @@ fn QueueRequestsPage(
     let mut share_modal_open = use_signal(|| false);
     let mut settings_modal_open = use_signal(|| false);
     let mut settings_allow_guests = use_signal(|| queue.summary.allow_guests);
+    let mut settings_is_public = use_signal(|| queue.summary.is_public);
+    let mut settings_schedule_mode = use_signal(|| schedule_mode_for_queue(&queue.summary));
+    let mut settings_opens_at =
+        use_signal(|| rfc3339_to_local_datetime(queue.summary.opens_at.as_deref()));
+    let (initial_weekly_day, initial_weekly_time) =
+        utc_weekly_to_local(queue.summary.weekly_schedule.as_ref());
+    let mut settings_weekly_day = use_signal(|| initial_weekly_day);
+    let mut settings_weekly_time = use_signal(|| initial_weekly_time);
     let mut settings_fields = use_signal(|| editable_fields_from_queue(&queue.fields));
+    let mut schedule_modal_open = use_signal(|| false);
     let queue_link = frontend_url(&Route::Queue {
         queue_id: queue.summary.id.to_string(),
     });
@@ -1622,6 +1875,11 @@ fn QueueRequestsPage(
                     p { class: "lede",
                         "Owned by {queue.owner_name} • {queue.summary.waiting_count} waiting • {queue.summary.active_count} active"
                     }
+                    if let Some(opens_at) = queue.summary.opens_at.as_deref() {
+                        p { class: "hint", "Scheduled to open {format_timestamp(opens_at)}" }
+                    } else if let Some(schedule) = queue.summary.weekly_schedule.as_ref() {
+                        p { class: "hint", "{weekly_schedule_label(schedule)}" }
+                    }
                 }
                 div { class: "button-row",
                     a { class: "button button-primary", href: queue_link, "Open user link" }
@@ -1629,6 +1887,14 @@ fn QueueRequestsPage(
                         class: "button button-secondary",
                         onclick: move |_| {
                             settings_allow_guests.set(queue.summary.allow_guests);
+                            settings_is_public.set(queue.summary.is_public);
+                            settings_schedule_mode.set(schedule_mode_for_queue(&queue.summary));
+                            settings_opens_at
+                                .set(rfc3339_to_local_datetime(queue.summary.opens_at.as_deref()));
+                            let (weekly_day, weekly_time) =
+                                utc_weekly_to_local(queue.summary.weekly_schedule.as_ref());
+                            settings_weekly_day.set(weekly_day);
+                            settings_weekly_time.set(weekly_time);
                             settings_fields.set(editable_fields_from_queue(&queue.fields));
                             settings_modal_open.set(true);
                         },
@@ -1673,16 +1939,34 @@ fn QueueRequestsPage(
                             }
                         }
                         p { class: "hint", "Changes apply to the live user form. Existing requests keep their saved values." }
-                        label { class: "access-switch",
-                            input {
-                                r#type: "checkbox",
-                                checked: "{settings_allow_guests}",
-                                oninput: move |event| settings_allow_guests.set(event.checked())
+                        div { class: "button-row",
+                            label { class: "access-switch",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: "{settings_allow_guests}",
+                                    oninput: move |event| settings_allow_guests.set(event.checked())
+                                }
+                                span { class: "switch-track",
+                                    span { class: "switch-thumb" }
+                                }
+                                span { class: "switch-label", "Guests" }
                             }
-                            span { class: "switch-track",
-                                span { class: "switch-thumb" }
+                            label { class: "access-switch",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: "{settings_is_public}",
+                                    oninput: move |event| settings_is_public.set(event.checked())
+                                }
+                                span { class: "switch-track",
+                                    span { class: "switch-thumb" }
+                                }
+                                span { class: "switch-label", "Public" }
                             }
-                            span { class: "switch-label", "Guests" }
+                        }
+                        button {
+                            class: "button button-secondary",
+                            onclick: move |_| schedule_modal_open.set(true),
+                            "{schedule_button_label(&settings_schedule_mode(), &settings_opens_at(), settings_weekly_day(), &settings_weekly_time())}"
                         }
                         div { class: "field-list",
                             if settings_fields().is_empty() {
@@ -1700,6 +1984,9 @@ fn QueueRequestsPage(
                                             queue_id,
                                             settings_fields(),
                                             settings_allow_guests(),
+                                            settings_is_public(),
+                                            scheduled_opens_at(&settings_schedule_mode(), &settings_opens_at()),
+                                            scheduled_weekly(&settings_schedule_mode(), settings_weekly_day(), &settings_weekly_time()),
                                         ));
                                         settings_modal_open.set(false);
                                     },
@@ -1723,6 +2010,9 @@ fn QueueRequestsPage(
                                         queue_id,
                                         settings_fields(),
                                         settings_allow_guests(),
+                                        settings_is_public(),
+                                        scheduled_opens_at(&settings_schedule_mode(), &settings_opens_at()),
+                                        scheduled_weekly(&settings_schedule_mode(), settings_weekly_day(), &settings_weekly_time()),
                                     ));
                                     settings_modal_open.set(false);
                                 },
@@ -1730,6 +2020,15 @@ fn QueueRequestsPage(
                             }
                         }
                     }
+                }
+            }
+            if schedule_modal_open() {
+                ScheduleModal {
+                    mode: settings_schedule_mode,
+                    opens_at: settings_opens_at,
+                    weekly_day: settings_weekly_day,
+                    weekly_time: settings_weekly_time,
+                    on_close: move |_| schedule_modal_open.set(false),
                 }
             }
             if share_modal_open() {
@@ -2162,6 +2461,51 @@ fn handled_by_label(entry: &AdminEntryView) -> String {
         .claimed_by
         .clone()
         .unwrap_or_else(|| "Unassigned".to_string())
+}
+
+fn schedule_mode_for_queue(queue: &QueueSummary) -> String {
+    if queue.weekly_schedule.is_some() {
+        "weekly".to_string()
+    } else if queue.opens_at.is_some() {
+        "once".to_string()
+    } else {
+        "none".to_string()
+    }
+}
+
+fn scheduled_opens_at(mode: &str, opens_at: &str) -> Option<String> {
+    if mode == "once" {
+        local_datetime_to_rfc3339(opens_at)
+    } else {
+        None
+    }
+}
+
+fn scheduled_weekly(
+    mode: &str,
+    weekly_day: u8,
+    weekly_time: &str,
+) -> Option<shared::WeeklySchedule> {
+    if mode == "weekly" {
+        local_weekly_to_utc(weekly_day, weekly_time)
+    } else {
+        None
+    }
+}
+
+fn schedule_button_label(mode: &str, opens_at: &str, weekly_day: u8, weekly_time: &str) -> String {
+    match mode {
+        "once" => local_datetime_to_rfc3339(opens_at)
+            .as_deref()
+            .map(format_timestamp)
+            .map(|value| format!("Scheduled: {value}"))
+            .unwrap_or_else(|| "Schedule".to_string()),
+        "weekly" => format!(
+            "Scheduled: weekly {} {weekly_time}",
+            weekday_name(weekly_day)
+        ),
+        _ => "Schedule".to_string(),
+    }
 }
 
 fn nav_button_class(active: AdminSection, target: AdminSection) -> &'static str {

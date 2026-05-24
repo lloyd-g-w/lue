@@ -1,10 +1,13 @@
 use dioxus::prelude::*;
+use shared::QueueSummary;
 
 use crate::models::AdminSessionRecord;
 use crate::route::{navigate, Route};
 use crate::storage::{load_admin_session, save_admin_session};
 use crate::view_helpers::is_enter_key;
-use crate::ws::{check_setup_socket, login_admin_socket, setup_super_admin_socket};
+use crate::ws::{
+    check_setup_socket, list_public_queues_socket, login_admin_socket, setup_super_admin_socket,
+};
 
 #[component]
 pub fn HomePage(route: Signal<Route>) -> Element {
@@ -13,23 +16,20 @@ pub fn HomePage(route: Signal<Route>) -> Element {
     let mut admin_password = use_signal(String::new);
     let feedback = use_signal(String::new);
     let setup_required = use_signal(|| None::<bool>);
+    let public_queues = use_signal(|| None::<Vec<QueueSummary>>);
     let has_existing_session = load_admin_session().is_some();
 
     use_effect(move || {
-        if has_existing_session {
-            navigate(
-                route,
-                Route::Admin {
-                    queue_id: None,
-                    request_id: None,
-                },
-            );
-        } else if setup_required().is_none() {
+        if setup_required().is_none() {
             let mut setup_required = setup_required;
             check_setup_socket(
                 move |needs_setup| setup_required.set(Some(needs_setup)),
                 feedback,
             );
+        }
+        if public_queues().is_none() {
+            let mut public_queues = public_queues;
+            list_public_queues_socket(move |queues| public_queues.set(Some(queues)), feedback);
         }
     });
 
@@ -96,12 +96,7 @@ pub fn HomePage(route: Signal<Route>) -> Element {
     };
 
     rsx! {
-        if has_existing_session {
-            section { class: "empty-stage",
-                h1 { "Opening dashboard" }
-                p { class: "lede", "Using your saved admin session." }
-            }
-        } else if setup_required().is_none() {
+        if setup_required().is_none() || public_queues().is_none() {
             section { class: "empty-stage",
                 h1 { "Checking setup" }
                 p { class: "lede", "Connecting to the server." }
@@ -118,25 +113,24 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                     "Named admins, explicit queue ownership, request history, and real-time updates without the usual dashboard clutter."
                 }
                 div { class: "point-list",
-                    div { class: "point-row",
-                        span { class: "point-badge", "01" }
-                        div {
-                            h3 { "Named actions" }
-                            p { class: "lede", "Claims and outcomes carry the admin name through to the user view." }
+                    if let Some(queues) = public_queues() {
+                        if queues.is_empty() {
+                            div { class: "empty-panel",
+                                p { class: "hint", "No public queues are open right now." }
+                            }
+                        } else {
+                            div { class: "public-queue-list",
+                                for queue in queues {
+                                    PublicQueueCard { route, queue }
+                                }
+                            }
                         }
                     }
-                    div { class: "point-row",
-                        span { class: "point-badge", "02" }
-                        div {
-                            h3 { "Queues as a real list" }
-                            p { class: "lede", "Browse queues as rows, open one, then drill into a request from its own list." }
-                        }
-                    }
-                    div { class: "point-row",
-                        span { class: "point-badge", "03" }
-                        div {
-                            h3 { "Live, but understandable" }
-                            p { class: "lede", "Users get status updates immediately while admins keep a visible audit trail." }
+                    if has_existing_session {
+                        button {
+                            class: "button button-secondary",
+                            onclick: move |_| navigate(route, Route::Admin { queue_id: None, request_id: None }),
+                            "Open admin dashboard"
                         }
                     }
                 }
@@ -221,6 +215,29 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                 }
             }
             }
+        }
+    }
+}
+
+#[component]
+fn PublicQueueCard(route: Signal<Route>, queue: QueueSummary) -> Element {
+    let queue_id = queue.id.to_string();
+    rsx! {
+        button {
+            class: "public-queue-card",
+            onclick: move |_| navigate(route, Route::Queue { queue_id: queue_id.clone() }),
+            div {
+                h3 { "{queue.name}" }
+                p { class: "hint",
+                    "{queue.waiting_count} waiting"
+                    if queue.allow_guests {
+                        " • guests allowed"
+                    } else {
+                        " • sign-in required"
+                    }
+                }
+            }
+            span { class: "counter-pill", "{queue.active_count} active" }
         }
     }
 }

@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use dioxus::prelude::*;
 use shared::{ClientMessage, QueueEntryStatus, ServerMessage, UserEntryView, UserQueueView};
@@ -10,10 +12,10 @@ use crate::storage::{
     clear_entry_token, clear_user_session, load_entry_token, load_user_session, save_entry_token,
     save_user_session,
 };
-use crate::view_helpers::{
-    format_timestamp, is_enter_key, is_requester_name_key, status_class_suffix, status_label,
+use crate::view_helpers::{is_enter_key, is_requester_name_key, status_class_suffix, status_label};
+use crate::ws::{
+    connect_reconnecting_socket, login_user_socket, send_ws, ReconnectingSocket, SocketStatus,
 };
-use crate::ws::{connect_reconnecting_socket, login_user_socket, send_ws, SocketStatus};
 
 #[component]
 pub fn QueuePage(queue_id: String) -> Element {
@@ -27,6 +29,15 @@ pub fn QueuePage(queue_id: String) -> Element {
     let mut auth_password = use_signal(String::new);
     let mut form_values = use_signal(BTreeMap::<String, String>::new);
     let socket = use_signal(|| None::<WebSocket>);
+    let connection_handle = use_hook(|| Rc::new(RefCell::new(None::<ReconnectingSocket>)));
+    {
+        let connection_handle = connection_handle.clone();
+        use_drop(move || {
+            if let Some(connection) = connection_handle.borrow_mut().take() {
+                connection.close();
+            }
+        });
+    }
 
     let parsed_queue_id = Uuid::parse_str(&queue_id).ok();
     if parsed_queue_id.is_none() {
@@ -47,11 +58,12 @@ pub fn QueuePage(queue_id: String) -> Element {
         let mut socket = socket;
         let mut form_values = form_values;
         let queue_id = parsed_queue_id;
+        let connection_handle = connection_handle.clone();
 
         let existing_token = load_entry_token(queue_id);
         let user_token = load_user_session().map(|session| session.token);
 
-        connect_reconnecting_socket(
+        let connection = connect_reconnecting_socket(
             move |message| match message {
                 ServerMessage::QueueState {
                     queue,
@@ -70,7 +82,19 @@ pub fn QueuePage(queue_id: String) -> Element {
                         clear_entry_token(queue.id);
                     }
 
-                    if form_values().is_empty() {
+                    if matches!(
+                        entry.as_ref().map(|entry| &entry.status),
+                        Some(QueueEntryStatus::Left)
+                    ) {
+                        let mut next = entry
+                            .as_ref()
+                            .map(|entry| entry.values.clone())
+                            .unwrap_or_default();
+                        for field in &queue.fields {
+                            next.entry(field.key.clone()).or_default();
+                        }
+                        form_values.set(next);
+                    } else if form_values().is_empty() {
                         let mut initial = BTreeMap::new();
                         for field in &queue.fields {
                             initial.insert(field.key.clone(), String::new());
@@ -107,6 +131,10 @@ pub fn QueuePage(queue_id: String) -> Element {
                 }
             },
         );
+        let previous_connection = connection_handle.borrow_mut().replace(connection);
+        if let Some(previous_connection) = previous_connection {
+            previous_connection.close();
+        }
     });
 
     let login_user = {
@@ -182,7 +210,6 @@ pub fn QueuePage(queue_id: String) -> Element {
         let socket = socket;
         move |_| {
             if let (Some(queue), Some(entry), Some(ws)) = (queue_state(), your_entry(), socket()) {
-                clear_entry_token(queue.id);
                 let _ = send_ws(
                     &ws,
                     &ClientMessage::LeaveQueue {
@@ -211,23 +238,26 @@ pub fn QueuePage(queue_id: String) -> Element {
                     }
 
                     if let Some(entry) = your_entry() {
-                        div { class: "ticket-panel queue-status-block",
-                            p { class: "ticket-label", "Your request" }
-                            p { class: "status-pill {status_class_suffix(&entry.status)}",
-                                "{user_status_label(&entry)}"
-                                if let Some(position) = entry.position {
-                                    " • position {position}"
-                                }
-                            }
+                        if matches!(entry.status, QueueEntryStatus::Left) {
                             if queue.closed_at.is_some() {
-                                p { class: "feedback", "This queue has been closed." }
-                            } else if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
-                                button { class: "button danger", onclick: leave_queue, "Leave queue" }
-                            } else {
-                                if let Some(rejoin_after) = entry.rejoin_after.clone() {
-                                    p { class: "hint", "Rejoin available after {format_timestamp(&rejoin_after)}." }
+                                p { class: "hint", "This queue is no longer accepting requests." }
+                            }
+                        } else {
+                            div { class: "ticket-panel queue-status-block",
+                                p { class: "ticket-label", "Your request" }
+                                p { class: "status-pill {status_class_suffix(&entry.status)}",
+                                    "{user_status_label(&entry)}"
+                                    if let Some(position) = entry.position {
+                                        " • position {position}"
+                                    }
                                 }
-                                button { class: "button button-primary", onclick: move |_| join_queue.call(()), "Rejoin queue" }
+                                if queue.closed_at.is_some() {
+                                    p { class: "feedback", "This queue has been closed." }
+                                } else if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
+                                    button { class: "button danger", onclick: leave_queue, "Leave queue" }
+                                } else {
+                                    p { class: "hint", "This request is no longer active." }
+                                }
                             }
                         }
                     } else if queue.closed_at.is_some() {
@@ -239,7 +269,7 @@ pub fn QueuePage(queue_id: String) -> Element {
                     }
                 }
 
-                if queue.closed_at.is_none() && your_entry().is_none() {
+                if queue.closed_at.is_none() && should_show_join_form(your_entry()) {
                     section { class: "queue-form-panel",
                         if let Some(user) = user_session() {
                             div { class: "signed-in-strip",
@@ -319,7 +349,11 @@ pub fn QueuePage(queue_id: String) -> Element {
                                         }
                                     }
                                 }
-                                button { class: "button button-primary", onclick: move |_| join_queue.call(()), "Join queue" }
+                                button {
+                                    class: "button button-primary",
+                                    onclick: move |_| join_queue.call(()),
+                                    "{join_button_label(user_session())}"
+                                }
                             }
                         } else {
                             p { class: "hint", "Sign in to unlock the form." }
@@ -372,6 +406,18 @@ fn connection_class(status: SocketStatus) -> &'static str {
         SocketStatus::Connecting => "connection-connecting",
         SocketStatus::Reconnecting => "connection-reconnecting",
     }
+}
+
+fn should_show_join_form(entry: Option<UserEntryView>) -> bool {
+    entry
+        .map(|entry| matches!(entry.status, QueueEntryStatus::Left))
+        .unwrap_or(true)
+}
+
+fn join_button_label(user_session: Option<UserSessionRecord>) -> String {
+    user_session
+        .map(|session| format!("Join queue as {}", session.name))
+        .unwrap_or_else(|| "Join queue as a guest".to_string())
 }
 
 fn user_status_label(entry: &UserEntryView) -> String {
