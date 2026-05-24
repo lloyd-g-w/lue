@@ -9,7 +9,9 @@ use shared::{
 use uuid::Uuid;
 use web_sys::WebSocket;
 
-use crate::components::DelayedLoading;
+use crate::components::{
+    DelayedLoading, UiButton, UiEmpty, UiHeader, UiModal, UiPanel, UiScheduleOption, UiSwitch,
+};
 use crate::models::{AccountDraft, AdminSessionRecord, EditableField, GroupDraft};
 use crate::route::{frontend_url, navigate, Route};
 use crate::storage::{clear_admin_session, load_admin_session, save_admin_session};
@@ -113,16 +115,11 @@ fn AdminAuthPage(route: Signal<Route>) -> Element {
 
     rsx! {
         section { class: "queue-page-layout",
-            div { class: "login-panel",
-                div { class: "panel-header",
-                    div {
-                        p { class: "kicker", "Admin Access" }
-                        if setup_required() == Some(true) {
-                            h2 { "Create super admin" }
-                        } else {
-                            h2 { "Sign in" }
-                        }
-                    }
+            UiPanel { class: "login-panel".to_string(),
+                UiHeader {
+                    kicker: "Admin Access".to_string(),
+                    title: if setup_required() == Some(true) { "Create super admin".to_string() } else { "Sign in".to_string() },
+                    div {}
                 }
                 if setup_required().is_none() {
                     p { class: "hint", "Checking admin setup..." }
@@ -185,16 +182,16 @@ fn AdminAuthPage(route: Signal<Route>) -> Element {
                     }
                     div { class: "action-stack",
                         if setup_required() == Some(true) {
-                            button {
-                                class: "button button-primary",
+                            UiButton {
+                                label: "Create account".to_string(),
+                                variant: "primary".to_string(),
                                 onclick: move |_| setup.call(()),
-                                "Create account"
                             }
                         } else {
-                            button {
-                                class: "button button-primary",
+                            UiButton {
+                                label: "Enter dashboard".to_string(),
+                                variant: "primary".to_string(),
                                 onclick: move |_| login.call(()),
-                                "Enter dashboard"
                             }
                         }
                     }
@@ -1072,42 +1069,29 @@ fn NewQueuePage(
     let mut schedule_modal_open = use_signal(|| false);
 
     rsx! {
-        section { class: "table-page-section split-view-section create-queue-section",
-            div { class: "panel-header",
-                div {
-                    p { class: "kicker", "Create Queue" }
-                    h2 { "New queue" }
-                    p { class: "lede", "Set up the public join form and access mode before sharing a queue link." }
-                }
+        UiPanel { class: "split-view-section create-queue-section".to_string(),
+            UiHeader {
+                kicker: "Create Queue".to_string(),
+                title: "New queue".to_string(),
+                lede: Some("Set up the public join form and access mode before sharing a queue link.".to_string()),
                 div { class: "create-queue-controls",
                     div { class: "create-queue-switches",
-                        label { class: "access-switch",
-                            input {
-                                r#type: "checkbox",
-                                checked: "{queue_allow_guests}",
-                                oninput: move |event| queue_allow_guests.set(event.checked())
-                            }
-                            span { class: "switch-track",
-                                span { class: "switch-thumb" }
-                            }
-                            span { class: "switch-label", "Guests" }
+                        UiSwitch {
+                            label: "Guests".to_string(),
+                            checked: queue_allow_guests(),
+                            onchange: move |checked| queue_allow_guests.set(checked),
                         }
-                        label { class: "access-switch",
-                            input {
-                                r#type: "checkbox",
-                                checked: "{queue_is_public}",
-                                oninput: move |event| queue_is_public.set(event.checked())
-                            }
-                            span { class: "switch-track",
-                                span { class: "switch-thumb" }
-                            }
-                            span { class: "switch-label", "Public" }
+                        UiSwitch {
+                            label: "Public".to_string(),
+                            checked: queue_is_public(),
+                            onchange: move |checked| queue_is_public.set(checked),
                         }
                     }
-                    button {
-                        class: "button button-secondary create-queue-schedule",
+                    UiButton {
+                        label: schedule_button_label(&queue_schedule_mode(), &queue_opens_at(), queue_weekly_day(), &queue_weekly_time()),
+                        variant: "secondary".to_string(),
+                        class: "create-queue-schedule".to_string(),
                         onclick: move |_| schedule_modal_open.set(true),
-                        "{schedule_button_label(&queue_schedule_mode(), &queue_opens_at(), queue_weekly_day(), &queue_weekly_time())}"
                     }
                 }
             }
@@ -1129,9 +1113,7 @@ fn NewQueuePage(
                 }
                 div { class: "field-list",
                     if fields().is_empty() {
-                        div { class: "empty-panel",
-                            p { class: "hint", "No custom fields" }
-                        }
+                        UiEmpty { message: "No custom fields".to_string() }
                     }
                     for (index, field) in fields().iter().enumerate() {
                         FieldEditorRow {
@@ -1143,16 +1125,20 @@ fn NewQueuePage(
                     }
                 }
                 div { class: "button-row",
-                    button {
-                        class: "button button-secondary",
+                    UiButton {
+                        label: "Add field".to_string(),
+                        variant: "secondary".to_string(),
                         onclick: move |_| {
                             let mut next = fields();
                             next.push(EditableField::new(""));
                             fields.set(next);
                         },
-                        "Add field"
                     }
-                    button { class: "button button-primary", onclick: move |_| create_queue.call(()), "Create queue" }
+                    UiButton {
+                        label: "Create queue".to_string(),
+                        variant: "primary".to_string(),
+                        onclick: move |_| create_queue.call(()),
+                    }
                 }
             }
             if schedule_modal_open() {
@@ -1182,46 +1168,34 @@ fn ScheduleModal(
     let mut weekly_time = weekly_time;
 
     rsx! {
-        div { class: "modal-backdrop",
-            div { class: "modal-panel form-stack schedule-panel",
-                div { class: "panel-header",
-                    div {
-                        p { class: "kicker", "Schedule" }
-                        h2 { "Queue opening" }
-                    }
-                    button {
-                        class: "action-button",
+        UiModal { class: "form-stack schedule-panel".to_string(),
+                UiHeader {
+                    kicker: "Schedule".to_string(),
+                    title: "Queue opening".to_string(),
+                    UiButton {
+                        label: "Close".to_string(),
+                        variant: "ghost".to_string(),
                         onclick: move |_| on_close.call(()),
-                        "Close"
                     }
                 }
                 div { class: "schedule-options",
-                    label { class: if mode() == "none" { "schedule-option schedule-option-active" } else { "schedule-option" },
-                        input {
-                            r#type: "radio",
-                            name: "schedule-mode",
-                            checked: "{mode() == \"none\"}",
-                            oninput: move |_| mode.set("none".to_string())
-                        }
-                        span { "No schedule" }
+                    UiScheduleOption {
+                        label: "No schedule".to_string(),
+                        value: "none".to_string(),
+                        selected: mode() == "none",
+                        onchange: move |value| mode.set(value),
                     }
-                    label { class: if mode() == "once" { "schedule-option schedule-option-active" } else { "schedule-option" },
-                        input {
-                            r#type: "radio",
-                            name: "schedule-mode",
-                            checked: "{mode() == \"once\"}",
-                            oninput: move |_| mode.set("once".to_string())
-                        }
-                        span { "Open once" }
+                    UiScheduleOption {
+                        label: "Open once".to_string(),
+                        value: "once".to_string(),
+                        selected: mode() == "once",
+                        onchange: move |value| mode.set(value),
                     }
-                    label { class: if mode() == "weekly" { "schedule-option schedule-option-active" } else { "schedule-option" },
-                        input {
-                            r#type: "radio",
-                            name: "schedule-mode",
-                            checked: "{mode() == \"weekly\"}",
-                            oninput: move |_| mode.set("weekly".to_string())
-                        }
-                        span { "Open weekly" }
+                    UiScheduleOption {
+                        label: "Open weekly".to_string(),
+                        value: "weekly".to_string(),
+                        selected: mode() == "weekly",
+                        onchange: move |value| mode.set(value),
                     }
                 }
                 if mode() == "once" {
@@ -1265,23 +1239,22 @@ fn ScheduleModal(
                     p { class: "hint", "The queue is available as soon as it is created." }
                 }
                 div { class: "button-row",
-                    button {
-                        class: "button button-secondary",
+                    UiButton {
+                        label: "Clear schedule".to_string(),
+                        variant: "secondary".to_string(),
                         onclick: move |_| {
                             mode.set("none".to_string());
                             opens_at.set(String::new());
                             weekly_day.set(1);
                             weekly_time.set("09:00".to_string());
                         },
-                        "Clear schedule"
                     }
-                    button {
-                        class: "button button-primary",
+                    UiButton {
+                        label: "Done".to_string(),
+                        variant: "primary".to_string(),
                         onclick: move |_| on_close.call(()),
-                        "Done"
                     }
                 }
-            }
         }
     }
 }

@@ -9,7 +9,7 @@ use shared::{
 use uuid::Uuid;
 use web_sys::WebSocket;
 
-use crate::components::DelayedLoading;
+use crate::components::{DelayedLoading, UiButton, UiPanel};
 use crate::models::UserSessionRecord;
 use crate::route::{navigate, Route};
 use crate::storage::{
@@ -244,13 +244,6 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                         }
                         span { "/queue/{queue_name}" }
                     }
-                    div { class: "queue-meta-line",
-                        if queue.closed_at.is_some() {
-                            span { class: "status-pill status-left", "Closed" }
-                        } else {
-                            span { class: "counter-pill", "{queue.waiting_count} waiting" }
-                        }
-                    }
                 }
                 section { class: "queue-hero-panel",
                     if let Some(entry) = your_entry() {
@@ -259,7 +252,7 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                                 p { class: "hint", "This queue is no longer accepting requests." }
                             }
                         } else {
-                            div { class: "ticket-panel queue-status-block",
+                            UiPanel { class: "ticket-panel queue-status-block".to_string(),
                                 p { class: "ticket-label", "Your request" }
                                 p { class: "status-pill {status_class_suffix(&entry.status)}",
                                     "{user_status_label(&entry)}"
@@ -270,7 +263,11 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                                 if queue.closed_at.is_some() {
                                     p { class: "feedback", "This queue has been closed." }
                                 } else if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
-                                    button { class: "button danger", onclick: leave_queue, "Leave queue" }
+                                    UiButton {
+                                        label: "Leave queue".to_string(),
+                                        variant: "danger".to_string(),
+                                        onclick: leave_queue,
+                                    }
                                 } else {
                                     p { class: "hint", "This request is no longer active." }
                                 }
@@ -286,11 +283,18 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                 }
 
                 if queue.closed_at.is_none() && should_show_join_form(your_entry()) {
-                    section { class: "queue-form-panel",
+                    UiPanel { class: "queue-form-panel".to_string(),
+                        div { class: "join-panel-status",
+                            span { class: "counter-pill", "{queue.waiting_count} waiting" }
+                        }
                         if let Some(user) = user_session() {
                             div { class: "signed-in-strip",
                                 span { "Signed in as {user.email}" }
-                                button { class: "button button-secondary", onclick: sign_out_user, "Sign out" }
+                                UiButton {
+                                    label: "Sign out".to_string(),
+                                    variant: "secondary".to_string(),
+                                    onclick: sign_out_user,
+                                }
                             }
                         } else {
                             div { class: "auth-inline-grid",
@@ -325,7 +329,12 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                                         placeholder: "Password"
                                     }
                                 }
-                                button { class: "button button-secondary auth-submit", onclick: move |_| login_user.call(()), "Sign in" }
+                                UiButton {
+                                    label: "Sign in".to_string(),
+                                    variant: "secondary".to_string(),
+                                    class: "auth-submit".to_string(),
+                                    onclick: move |_| login_user.call(()),
+                                }
                             }
                             if !queue.allow_guests {
                                 p { class: "hint", "An account is required for this queue." }
@@ -346,10 +355,10 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                                         }
                                     }
                                 }
-                                button {
-                                    class: "button button-primary",
+                                UiButton {
+                                    label: join_button_label(user_session()),
+                                    variant: "primary".to_string(),
                                     onclick: move |_| join_queue.call(()),
-                                    "{join_button_label(user_session())}"
                                 }
                             }
                         }

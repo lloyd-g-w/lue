@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use shared::QueueSummary;
 
-use crate::components::DelayedLoading;
+use crate::components::{DelayedLoading, UiButton, UiEmpty, UiHeader, UiPanel};
 use crate::models::UserSessionRecord;
 use crate::route::{navigate, Route};
 use crate::storage::{clear_user_session, load_user_session, save_user_session};
@@ -76,9 +76,7 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                 div { class: "public-queue-list",
                     if let Some(queues) = public_queues() {
                         if queues.is_empty() {
-                            div { class: "empty-panel",
-                                p { class: "hint", "No public queues are open right now." }
-                            }
+                            UiEmpty { message: "No public queues are open right now.".to_string() }
                         } else {
                             div { class: "public-queue-list",
                                 for queue in queues {
@@ -90,20 +88,19 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                 }
             }
 
-            section { class: "login-panel",
-                div { class: "panel-header",
-                    div {
-                        p { class: "kicker", "User Access" }
-                        h2 { "Sign in" }
-                    }
+            UiPanel { class: "login-panel".to_string(),
+                UiHeader {
+                    kicker: "User Access".to_string(),
+                    title: "Sign in".to_string(),
+                    div {}
                 }
                 if let Some(user) = user_session() {
                     div { class: "signed-in-strip",
                         span { "Signed in as {user.email}" }
-                        button {
-                            class: "button button-secondary",
+                        UiButton {
+                            label: "Sign out".to_string(),
+                            variant: "secondary".to_string(),
                             onclick: sign_out_user,
-                            "Sign out"
                         }
                     }
                 } else {
@@ -139,10 +136,10 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                         }
                     }
                     div { class: "action-stack",
-                        button {
-                            class: "button button-primary",
+                        UiButton {
+                            label: "Sign in as user".to_string(),
+                            variant: "primary".to_string(),
                             onclick: move |_| login_user.call(()),
-                            "Sign in as user"
                         }
                     }
                 }
