@@ -305,11 +305,21 @@ fn backend_ws_url() -> String {
         Some("https:") => "wss",
         _ => "ws",
     };
-    let host = location
+    let hostname = location
         .hostname()
         .ok()
         .filter(|host| !host.is_empty())
         .unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = location.port().ok().unwrap_or_default();
+    let host = if matches!(hostname.as_str(), "127.0.0.1" | "localhost") && port == "8080" {
+        format!("{hostname}:{WS_BACKEND_PORT}")
+    } else {
+        location
+            .host()
+            .ok()
+            .filter(|host| !host.is_empty())
+            .unwrap_or_else(|| hostname.clone())
+    };
 
-    format!("{protocol}://{host}:{WS_BACKEND_PORT}/ws")
+    format!("{protocol}://{host}/ws")
 }

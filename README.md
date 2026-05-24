@@ -45,6 +45,38 @@ different file:
 DATA_PATH=/path/to/store.json cargo run -p server
 ```
 
+## Run with Docker Compose
+
+Build and start the full app:
+
+```bash
+docker compose up --build -d
+```
+
+Open the app at:
+
+```text
+http://127.0.0.1:8081
+```
+
+Compose runs two containers:
+
+- `server`: the Axum backend, listening inside Docker on `0.0.0.0:3000`
+- `web`: nginx serving the Dioxus static build and proxying `/ws` and `/health` to `server`
+
+Persistent data is stored in the named Docker volume `lue-data` at `/data/store.json` inside
+the server container. To stop the app without deleting data:
+
+```bash
+docker compose down
+```
+
+To remove the persisted queue store as well:
+
+```bash
+docker compose down -v
+```
+
 ## Routes
 
 - `/` shows the admin sign-in page

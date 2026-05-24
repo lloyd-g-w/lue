@@ -19,8 +19,11 @@ Persistent data defaults to `data/store.json`. The initial super admin is create
 - `cargo clippy --workspace --all-targets`: run lint checks before opening a PR.
 - `cargo run -p server`: start the backend on `127.0.0.1:3000`.
 - `dx serve --package web`: serve the Dioxus frontend; it expects `ws://127.0.0.1:3000/ws`.
+- `docker compose up --build -d`: build and run the production-style stack on `http://127.0.0.1:8081`.
 
 Use `DATA_PATH=/tmp/lue-store.json cargo run -p server` for isolated persistence.
+In containers, the backend uses `SERVER_ADDR=0.0.0.0:3000` and stores data at `/data/store.json`
+on the `lue-data` Docker volume.
 
 ## Coding Style & Naming Conventions
 

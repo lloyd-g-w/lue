@@ -1,0 +1,24 @@
+services:
+  server:
+    build:
+      context: .
+      target: server-runtime
+    environment:
+      SERVER_ADDR: 0.0.0.0:3000
+      DATA_PATH: /data/store.json
+    volumes:
+      - lue-data:/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      target: web-runtime
+    depends_on:
+      - server
+    ports:
+      - "8081:80"
+    restart: unless-stopped
+
+volumes:
+  lue-data:

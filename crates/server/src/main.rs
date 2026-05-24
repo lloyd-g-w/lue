@@ -36,11 +36,12 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let listener = TcpListener::bind("127.0.0.1:3000")
+    let server_addr = env::var("SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let listener = TcpListener::bind(&server_addr)
         .await
         .expect("bind backend listener");
 
-    println!("server listening on http://127.0.0.1:3000");
+    println!("server listening on http://{server_addr}");
     axum::serve(listener, app)
         .await
         .expect("serve axum application");
