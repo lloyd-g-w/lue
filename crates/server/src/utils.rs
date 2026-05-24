@@ -30,10 +30,22 @@ pub fn normalize_fields(fields: Vec<QueueField>) -> Result<Vec<QueueField>, Stri
             key,
             label,
             required: field.required,
+            options: normalize_options(field.options),
         });
     }
 
     Ok(normalized)
+}
+
+fn normalize_options(options: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for option in options {
+        let option = option.trim().to_string();
+        if !option.is_empty() && !normalized.contains(&option) {
+            normalized.push(option);
+        }
+    }
+    normalized
 }
 
 pub fn normalize_email(value: &str) -> Result<String, String> {

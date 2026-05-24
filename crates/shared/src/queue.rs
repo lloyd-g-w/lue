@@ -8,6 +8,8 @@ pub struct QueueField {
     pub key: String,
     pub label: String,
     pub required: bool,
+    #[serde(default)]
+    pub options: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

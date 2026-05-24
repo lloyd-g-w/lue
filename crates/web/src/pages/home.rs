@@ -1,118 +1,79 @@
 use dioxus::prelude::*;
 use shared::QueueSummary;
 
-use crate::models::AdminSessionRecord;
+use crate::components::DelayedLoading;
+use crate::models::UserSessionRecord;
 use crate::route::{navigate, Route};
-use crate::storage::{load_admin_session, save_admin_session};
-use crate::view_helpers::is_enter_key;
-use crate::ws::{
-    check_setup_socket, list_public_queues_socket, login_admin_socket, setup_super_admin_socket,
-};
+use crate::storage::{clear_user_session, load_user_session, save_user_session};
+use crate::view_helpers::{is_enter_key, kebab_case};
+use crate::ws::{list_public_queues_socket, login_user_socket};
 
 #[component]
 pub fn HomePage(route: Signal<Route>) -> Element {
-    let mut setup_name = use_signal(String::new);
-    let mut admin_email = use_signal(String::new);
-    let mut admin_password = use_signal(String::new);
+    let mut user_email = use_signal(String::new);
+    let mut user_password = use_signal(String::new);
+    let user_session = use_signal(load_user_session);
     let feedback = use_signal(String::new);
-    let setup_required = use_signal(|| None::<bool>);
     let public_queues = use_signal(|| None::<Vec<QueueSummary>>);
-    let has_existing_session = load_admin_session().is_some();
 
     use_effect(move || {
-        if setup_required().is_none() {
-            let mut setup_required = setup_required;
-            check_setup_socket(
-                move |needs_setup| setup_required.set(Some(needs_setup)),
-                feedback,
-            );
-        }
         if public_queues().is_none() {
             let mut public_queues = public_queues;
             list_public_queues_socket(move |queues| public_queues.set(Some(queues)), feedback);
         }
     });
 
-    let login = {
-        let admin_email = admin_email;
-        let admin_password = admin_password;
+    let login_user = {
+        let user_email = user_email;
+        let user_password = user_password;
+        let mut user_session = user_session;
         let mut feedback = feedback;
-        let route = route;
         EventHandler::new(move |_| {
             feedback.set("Signing in...".to_string());
-            login_admin_socket(
-                admin_email(),
-                admin_password(),
-                move |admin| {
-                    save_admin_session(&AdminSessionRecord {
-                        token: admin.token.clone(),
-                        name: admin.name,
-                        email: admin.email,
-                        is_super_admin: admin.is_super_admin,
-                    });
-                    navigate(
-                        route,
-                        Route::Admin {
-                            queue_id: None,
-                            request_id: None,
-                        },
-                    );
+            login_user_socket(
+                user_email(),
+                user_password(),
+                move |user| {
+                    let session = UserSessionRecord {
+                        token: user.token.clone(),
+                        name: user.name,
+                        email: user.email,
+                    };
+                    save_user_session(&session);
+                    user_session.set(Some(session));
+                    feedback.set(String::new());
                 },
                 feedback,
             );
         })
     };
 
-    let setup = {
-        let setup_name = setup_name;
-        let admin_email = admin_email;
-        let admin_password = admin_password;
+    let sign_out_user = {
+        let mut user_session = user_session;
         let mut feedback = feedback;
-        let route = route;
-        EventHandler::new(move |_| {
-            feedback.set("Creating super admin...".to_string());
-            setup_super_admin_socket(
-                setup_name(),
-                admin_email(),
-                admin_password(),
-                move |admin| {
-                    save_admin_session(&AdminSessionRecord {
-                        token: admin.token.clone(),
-                        name: admin.name,
-                        email: admin.email,
-                        is_super_admin: admin.is_super_admin,
-                    });
-                    navigate(
-                        route,
-                        Route::Admin {
-                            queue_id: None,
-                            request_id: None,
-                        },
-                    );
-                },
-                feedback,
-            );
-        })
+        move |_| {
+            clear_user_session();
+            user_session.set(None);
+            feedback.set(String::new());
+        }
     };
 
     rsx! {
-        if setup_required().is_none() || public_queues().is_none() {
-            section { class: "empty-stage",
-                h1 { "Checking setup" }
-                p { class: "lede", "Connecting to the server." }
-                if !feedback().is_empty() {
-                    p { class: "feedback", "{feedback}" }
-                }
+        if public_queues().is_none() {
+            DelayedLoading {
+                title: "Checking queues".to_string(),
+                detail: Some("Connecting to the server.".to_string()),
+                feedback: feedback(),
             }
         } else {
-            div { class: "landing-layout",
-            section { class: "landing-copy",
-                p { class: "kicker", "Queue System" }
-                h1 { "A cleaner way to run live queues." }
-                p { class: "landing-lede",
-                    "Named admins, explicit queue ownership, request history, and real-time updates without the usual dashboard clutter."
+            div { class: "home-layout",
+            section { class: "home-main",
+                div { class: "home-title-row",
+                    div {
+                        h1 { "Queues" }
+                    }
                 }
-                div { class: "point-list",
+                div { class: "public-queue-list",
                     if let Some(queues) = public_queues() {
                         if queues.is_empty() {
                             div { class: "empty-panel",
@@ -126,88 +87,63 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                             }
                         }
                     }
-                    if has_existing_session {
-                        button {
-                            class: "button button-secondary",
-                            onclick: move |_| navigate(route, Route::Admin { queue_id: None, request_id: None }),
-                            "Open admin dashboard"
-                        }
-                    }
                 }
             }
 
             section { class: "login-panel",
                 div { class: "panel-header",
                     div {
-                        p { class: "kicker", "Admin Access" }
-                        if setup_required() == Some(true) {
-                            h2 { "Create super admin" }
-                        } else {
-                            h2 { "Sign in" }
-                        }
+                        p { class: "kicker", "User Access" }
+                        h2 { "Sign in" }
                     }
                 }
-                if setup_required() == Some(true) {
+                if let Some(user) = user_session() {
+                    div { class: "signed-in-strip",
+                        span { "Signed in as {user.email}" }
+                        button {
+                            class: "button button-secondary",
+                            onclick: sign_out_user,
+                            "Sign out"
+                        }
+                    }
+                } else {
                     div { class: "input-group",
-                        label { class: "label", "Name" }
+                        label { class: "label", "Email" }
                         input {
                             class: "input",
-                            value: "{setup_name}",
-                            oninput: move |event| setup_name.set(event.value()),
+                            value: "{user_email}",
+                            oninput: move |event| user_email.set(event.value()),
                             onkeydown: move |event| {
                                 if is_enter_key(&event) {
                                     event.prevent_default();
-                                    setup.call(());
+                                    login_user.call(());
                                 }
                             },
-                            placeholder: "Super Admin"
+                            placeholder: "user@example.com"
                         }
                     }
-                }
-                div { class: "input-group",
-                    label { class: "label", "Email" }
-                    input {
-                        class: "input",
-                        value: "{admin_email}",
-                        oninput: move |event| admin_email.set(event.value()),
-                        onkeydown: move |event| {
-                            if is_enter_key(&event) {
-                                event.prevent_default();
-                                if setup_required() == Some(true) {
-                                    setup.call(());
-                                } else {
-                                    login.call(());
+                    div { class: "input-group",
+                        label { class: "label", "Password" }
+                        input {
+                            class: "input",
+                            r#type: "password",
+                            value: "{user_password}",
+                            oninput: move |event| user_password.set(event.value()),
+                            onkeydown: move |event| {
+                                if is_enter_key(&event) {
+                                    event.prevent_default();
+                                    login_user.call(());
                                 }
-                            }
-                        },
-                        placeholder: "admin@example.com"
+                            },
+                            placeholder: "Password"
+                        }
                     }
-                }
-                div { class: "input-group",
-                    label { class: "label", "Password" }
-                    input {
-                        class: "input",
-                        r#type: "password",
-                        value: "{admin_password}",
-                        oninput: move |event| admin_password.set(event.value()),
-                        onkeydown: move |event| {
-                            if is_enter_key(&event) {
-                                event.prevent_default();
-                                if setup_required() == Some(true) {
-                                    setup.call(());
-                                } else {
-                                    login.call(());
-                                }
-                            }
-                        },
-                        placeholder: "Password"
-                    }
-                }
-                div { class: "action-stack",
-                    if setup_required() == Some(true) {
-                        button { class: "button button-primary", onclick: move |_| setup.call(()), "Create account" }
-                    } else {
-                        button { class: "button button-primary", onclick: move |_| login.call(()), "Enter dashboard" }
+                    div { class: "action-stack",
+                        button {
+                            class: "button button-primary",
+                            onclick: move |_| login_user.call(()),
+                            "Sign in as user"
+                        }
                     }
                 }
                 if !feedback().is_empty() {
@@ -222,22 +158,22 @@ pub fn HomePage(route: Signal<Route>) -> Element {
 #[component]
 fn PublicQueueCard(route: Signal<Route>, queue: QueueSummary) -> Element {
     let queue_id = queue.id.to_string();
+    let queue_name = kebab_case(&queue.name);
     rsx! {
         button {
             class: "public-queue-card",
             onclick: move |_| navigate(route, Route::Queue { queue_id: queue_id.clone() }),
             div {
-                h3 { "{queue.name}" }
-                p { class: "hint",
-                    "{queue.waiting_count} waiting"
-                    if queue.allow_guests {
-                        " • guests allowed"
-                    } else {
-                        " • sign-in required"
-                    }
+                h3 { "{queue_name}" }
+                p { class: "hint", "{queue.waiting_count} waiting" }
+            }
+            span { class: "counter-pill",
+                if queue.allow_guests {
+                    "Guest"
+                } else {
+                    "Sign in"
                 }
             }
-            span { class: "counter-pill", "{queue.active_count} active" }
         }
     }
 }

@@ -827,6 +827,12 @@ impl Store {
             if field.required && value.is_empty() {
                 return Err(format!("{} is required", field.label));
             }
+            if !value.is_empty() && !field.options.is_empty() && !field.options.contains(&value) {
+                return Err(format!(
+                    "{} must be one of the available options",
+                    field.label
+                ));
+            }
 
             values.insert(field.key.clone(), value);
         }
@@ -1429,6 +1435,7 @@ mod tests {
                     key: "name".to_string(),
                     label: "Name".to_string(),
                     required: true,
+                    options: Vec::new(),
                 }],
                 true,
                 false,
@@ -1483,6 +1490,7 @@ mod tests {
                     key: "name".to_string(),
                     label: "Name".to_string(),
                     required: true,
+                    options: Vec::new(),
                 }],
                 true,
                 false,
@@ -1584,11 +1592,13 @@ mod tests {
                         key: "name".to_string(),
                         label: "Name".to_string(),
                         required: false,
+                        options: Vec::new(),
                     },
                     QueueField {
                         key: "subject".to_string(),
                         label: "Subject".to_string(),
                         required: true,
+                        options: Vec::new(),
                     },
                 ],
                 false,
@@ -1677,6 +1687,7 @@ mod tests {
                     key: String::new(),
                     label: "Full Name.".to_string(),
                     required: true,
+                    options: Vec::new(),
                 }],
                 false,
                 false,
@@ -1784,6 +1795,7 @@ mod tests {
                     key: "subject".to_string(),
                     label: "Subject".to_string(),
                     required: true,
+                    options: Vec::new(),
                 }],
                 false,
                 false,
@@ -1800,6 +1812,7 @@ mod tests {
                     key: "topic".to_string(),
                     label: "Topic".to_string(),
                     required: false,
+                    options: Vec::new(),
                 }],
                 true,
                 false,
@@ -1816,6 +1829,61 @@ mod tests {
         store
             .join_queue(queue_id, BTreeMap::new(), None, None)
             .expect("guest can join with optional field empty");
+    }
+
+    #[test]
+    fn dropdown_field_options_are_normalized_and_enforced() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                vec![QueueField {
+                    key: "topic".to_string(),
+                    label: "Topic".to_string(),
+                    required: true,
+                    options: vec![
+                        "Billing".to_string(),
+                        " ".to_string(),
+                        "Technical".to_string(),
+                        "Billing".to_string(),
+                    ],
+                }],
+                true,
+                false,
+                None,
+                None,
+            )
+            .expect("create queue");
+
+        let (queue_view, _) = store.user_view(queue_id, None).expect("user queue view");
+        assert_eq!(
+            queue_view.fields[0].options,
+            vec!["Billing".to_string(), "Technical".to_string()]
+        );
+
+        let mut values = BTreeMap::new();
+        values.insert("topic".to_string(), "Other".to_string());
+        let error = store
+            .join_queue(queue_id, values, None, None)
+            .expect_err("invalid dropdown option is rejected");
+        assert!(error.contains("available options"));
+
+        let mut values = BTreeMap::new();
+        values.insert("topic".to_string(), "Technical".to_string());
+        store
+            .join_queue(queue_id, values, None, None)
+            .expect("valid dropdown option is accepted");
     }
 
     #[test]
@@ -2021,6 +2089,7 @@ mod tests {
                     key: "account".to_string(),
                     label: "Account".to_string(),
                     required: true,
+                    options: Vec::new(),
                 }],
                 true,
                 false,

@@ -165,6 +165,7 @@ mod tests {
                         key: "name".to_string(),
                         label: "Name".to_string(),
                         required: true,
+                        options: Vec::new(),
                     }],
                     entries: vec![QueueEntry {
                         id: entry_id,

@@ -20,6 +20,7 @@ pub struct UserSessionRecord {
 pub struct EditableField {
     pub label: String,
     pub required: bool,
+    pub options_text: String,
 }
 
 impl EditableField {
@@ -27,6 +28,7 @@ impl EditableField {
         Self {
             label: label.to_string(),
             required: true,
+            options_text: String::new(),
         }
     }
 }

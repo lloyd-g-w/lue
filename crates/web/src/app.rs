@@ -1,4 +1,9 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use dioxus::prelude::*;
+use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 
 use crate::pages::{AdminPage, HomePage, QueuePage};
 use crate::route::Route;
@@ -7,8 +12,44 @@ use crate::styles::APP_CSS;
 
 #[component]
 pub fn App() -> Element {
-    let route = use_signal(Route::current);
+    let mut route = use_signal(Route::current);
     let mut dark_theme = use_signal(|| load_dark_theme().unwrap_or(false));
+    let popstate_handler =
+        use_hook(|| Rc::new(RefCell::new(None::<Closure<dyn FnMut(web_sys::Event)>>)));
+
+    {
+        let popstate_handler = popstate_handler.clone();
+        use_effect(move || {
+            if popstate_handler.borrow().is_some() {
+                return;
+            }
+
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+
+            let handler = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+                route.set(Route::current());
+            });
+            let _ = window
+                .add_event_listener_with_callback("popstate", handler.as_ref().unchecked_ref());
+            *popstate_handler.borrow_mut() = Some(handler);
+        });
+    }
+
+    {
+        let popstate_handler = popstate_handler.clone();
+        use_drop(move || {
+            if let (Some(window), Some(handler)) =
+                (web_sys::window(), popstate_handler.borrow_mut().take())
+            {
+                let _ = window.remove_event_listener_with_callback(
+                    "popstate",
+                    handler.as_ref().unchecked_ref(),
+                );
+            }
+        });
+    }
 
     use_effect(move || {
         apply_theme(dark_theme());
@@ -38,7 +79,7 @@ pub fn App() -> Element {
             match route() {
                 Route::Home => rsx! { HomePage { route } },
                 Route::Admin { queue_id, request_id } => rsx! { AdminPage { route, selected_queue_id: queue_id, selected_request_id: request_id } },
-                Route::Queue { queue_id } => rsx! { QueuePage { queue_id } },
+                Route::Queue { queue_id } => rsx! { QueuePage { route, queue_id } },
             }
         }
     }

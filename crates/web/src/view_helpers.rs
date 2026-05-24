@@ -17,6 +17,23 @@ pub fn slugify(value: &str) -> String {
         .replace("__", "_")
 }
 
+pub fn kebab_case(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_was_separator = true;
+
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            output.push(character.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            output.push('-');
+            previous_was_separator = true;
+        }
+    }
+
+    output.trim_matches('-').to_string()
+}
+
 pub fn is_requester_name_key(key: &str) -> bool {
     matches!(key, "name" | "full_name")
 }

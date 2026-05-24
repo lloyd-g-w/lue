@@ -3,22 +3,28 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use shared::{ClientMessage, QueueEntryStatus, ServerMessage, UserEntryView, UserQueueView};
+use shared::{
+    ClientMessage, QueueEntryStatus, QueueField, ServerMessage, UserEntryView, UserQueueView,
+};
 use uuid::Uuid;
 use web_sys::WebSocket;
 
+use crate::components::DelayedLoading;
 use crate::models::UserSessionRecord;
+use crate::route::{navigate, Route};
 use crate::storage::{
     clear_entry_token, clear_user_session, load_entry_token, load_user_session, save_entry_token,
     save_user_session,
 };
-use crate::view_helpers::{is_enter_key, is_requester_name_key, status_class_suffix, status_label};
+use crate::view_helpers::{
+    is_enter_key, is_requester_name_key, kebab_case, status_class_suffix, status_label,
+};
 use crate::ws::{
     connect_reconnecting_socket, login_user_socket, send_ws, ReconnectingSocket, SocketStatus,
 };
 
 #[component]
-pub fn QueuePage(queue_id: String) -> Element {
+pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
     let queue_state = use_signal(|| None::<UserQueueView>);
     let your_entry = use_signal(|| None::<UserEntryView>);
     let user_session = use_signal(load_user_session);
@@ -27,7 +33,7 @@ pub fn QueuePage(queue_id: String) -> Element {
     let connection_status = use_signal(|| SocketStatus::Connecting);
     let mut auth_email = use_signal(String::new);
     let mut auth_password = use_signal(String::new);
-    let mut form_values = use_signal(BTreeMap::<String, String>::new);
+    let form_values = use_signal(BTreeMap::<String, String>::new);
     let socket = use_signal(|| None::<WebSocket>);
     let connection_handle = use_hook(|| Rc::new(RefCell::new(None::<ReconnectingSocket>)));
     {
@@ -225,18 +231,28 @@ pub fn QueuePage(queue_id: String) -> Element {
     rsx! {
         ConnectionStatusStrip { status: connection_status() }
         if let Some(queue) = snapshot {
+            {
+                let queue_name = kebab_case(&queue.name);
+                rsx! {
             div { class: "queue-page-layout",
-                section { class: "queue-hero-panel",
-                    p { class: "kicker", "Queue" }
-                    h1 { "{queue.name}" }
+                div { class: "queue-heading-row",
+                    nav { class: "path-nav path-nav-primary mono",
+                        button {
+                            class: "path-link",
+                            onclick: move |_| navigate(route, Route::Home),
+                            "~"
+                        }
+                        span { "/queue/{queue_name}" }
+                    }
                     div { class: "queue-meta-line",
                         if queue.closed_at.is_some() {
                             span { class: "status-pill status-left", "Closed" }
                         } else {
-                            span { "{queue.waiting_count} waiting" }
+                            span { class: "counter-pill", "{queue.waiting_count} waiting" }
                         }
                     }
-
+                }
+                section { class: "queue-hero-panel",
                     if let Some(entry) = your_entry() {
                         if matches!(entry.status, QueueEntryStatus::Left) {
                             if queue.closed_at.is_some() {
@@ -323,29 +339,10 @@ pub fn QueuePage(queue_id: String) -> Element {
                             div { class: "form-stack",
                                 for field in queue.fields.iter().cloned() {
                                     if !(user_session().is_some() && is_requester_name_key(&field.key)) {
-                                        div { class: "input-group",
-                                            label { class: "label",
-                                                "{field.label}"
-                                                if !field.required {
-                                                    " optional"
-                                                }
-                                            }
-                                            input {
-                                                class: "input",
-                                                value: "{form_values().get(&field.key).cloned().unwrap_or_default()}",
-                                                oninput: move |event| {
-                                                    let mut next = form_values();
-                                                    next.insert(field.key.clone(), event.value());
-                                                    form_values.set(next);
-                                                },
-                                                onkeydown: move |event| {
-                                                    if is_enter_key(&event) {
-                                                        event.prevent_default();
-                                                        join_queue.call(());
-                                                    }
-                                                },
-                                                placeholder: "{field.label}"
-                                            }
+                                        QueueFieldInput {
+                                            field,
+                                            form_values,
+                                            join_queue,
                                         }
                                     }
                                 }
@@ -355,8 +352,6 @@ pub fn QueuePage(queue_id: String) -> Element {
                                     "{join_button_label(user_session())}"
                                 }
                             }
-                        } else {
-                            p { class: "hint", "Sign in to unlock the form." }
                         }
 
                         if !feedback().is_empty() {
@@ -367,11 +362,65 @@ pub fn QueuePage(queue_id: String) -> Element {
                     p { class: "feedback floating-feedback", "{feedback}" }
                 }
             }
+                }
+            }
         } else {
-            section { class: "empty-stage",
-                h1 { "Connecting to queue..." }
-                if !feedback().is_empty() {
-                    p { class: "feedback", "{feedback}" }
+            DelayedLoading {
+                title: "Connecting to queue...".to_string(),
+                detail: None,
+                feedback: feedback(),
+            }
+        }
+    }
+}
+
+#[component]
+fn QueueFieldInput(
+    field: QueueField,
+    form_values: Signal<BTreeMap<String, String>>,
+    join_queue: EventHandler<()>,
+) -> Element {
+    let mut form_values = form_values;
+    let current_value = form_values().get(&field.key).cloned().unwrap_or_default();
+
+    rsx! {
+        div { class: "input-group",
+            label { class: "label",
+                "{field.label}"
+                if !field.required {
+                    " optional"
+                }
+            }
+            if field.options.is_empty() {
+                input {
+                    class: "input",
+                    value: "{current_value}",
+                    oninput: move |event| {
+                        let mut next = form_values();
+                        next.insert(field.key.clone(), event.value());
+                        form_values.set(next);
+                    },
+                    onkeydown: move |event| {
+                        if is_enter_key(&event) {
+                            event.prevent_default();
+                            join_queue.call(());
+                        }
+                    },
+                    placeholder: "{field.label}"
+                }
+            } else {
+                select {
+                    class: "input",
+                    value: "{current_value}",
+                    oninput: move |event| {
+                        let mut next = form_values();
+                        next.insert(field.key.clone(), event.value());
+                        form_values.set(next);
+                    },
+                    option { value: "", "Select {field.label}" }
+                    for option in field.options {
+                        option { value: "{option}", "{option}" }
+                    }
                 }
             }
         }

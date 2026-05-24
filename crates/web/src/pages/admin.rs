@@ -9,15 +9,19 @@ use shared::{
 use uuid::Uuid;
 use web_sys::WebSocket;
 
-use crate::models::{AccountDraft, EditableField, GroupDraft};
+use crate::components::DelayedLoading;
+use crate::models::{AccountDraft, AdminSessionRecord, EditableField, GroupDraft};
 use crate::route::{frontend_url, navigate, Route};
-use crate::storage::{clear_admin_session, load_admin_session};
+use crate::storage::{clear_admin_session, load_admin_session, save_admin_session};
 use crate::view_helpers::{
     format_timestamp, is_enter_key, local_datetime_to_rfc3339, local_weekly_to_utc,
     rfc3339_to_local_datetime, slugify, status_class, status_label, utc_weekly_to_local,
     weekday_name, weekly_schedule_label,
 };
-use crate::ws::{connect_reconnecting_socket, send_ws, ReconnectingSocket, SocketStatus};
+use crate::ws::{
+    check_setup_socket, connect_reconnecting_socket, login_admin_socket, send_ws,
+    setup_super_admin_socket, ReconnectingSocket, SocketStatus,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AdminSection {
@@ -28,6 +32,182 @@ enum AdminSection {
 }
 
 #[component]
+fn AdminAuthPage(route: Signal<Route>) -> Element {
+    let mut setup_name = use_signal(String::new);
+    let mut admin_email = use_signal(String::new);
+    let mut admin_password = use_signal(String::new);
+    let setup_required = use_signal(|| None::<bool>);
+    let feedback = use_signal(String::new);
+
+    use_effect(move || {
+        if setup_required().is_none() {
+            let mut setup_required = setup_required;
+            check_setup_socket(
+                move |needs_setup| setup_required.set(Some(needs_setup)),
+                feedback,
+            );
+        }
+    });
+
+    let login = {
+        let admin_email = admin_email;
+        let admin_password = admin_password;
+        let mut feedback = feedback;
+        let route = route;
+        EventHandler::new(move |_| {
+            feedback.set("Signing in...".to_string());
+            login_admin_socket(
+                admin_email(),
+                admin_password(),
+                move |admin| {
+                    save_admin_session(&AdminSessionRecord {
+                        token: admin.token.clone(),
+                        name: admin.name,
+                        email: admin.email,
+                        is_super_admin: admin.is_super_admin,
+                    });
+                    navigate(
+                        route,
+                        Route::Admin {
+                            queue_id: None,
+                            request_id: None,
+                        },
+                    );
+                },
+                feedback,
+            );
+        })
+    };
+
+    let setup = {
+        let setup_name = setup_name;
+        let admin_email = admin_email;
+        let admin_password = admin_password;
+        let mut feedback = feedback;
+        let route = route;
+        EventHandler::new(move |_| {
+            feedback.set("Creating super admin...".to_string());
+            setup_super_admin_socket(
+                setup_name(),
+                admin_email(),
+                admin_password(),
+                move |admin| {
+                    save_admin_session(&AdminSessionRecord {
+                        token: admin.token.clone(),
+                        name: admin.name,
+                        email: admin.email,
+                        is_super_admin: admin.is_super_admin,
+                    });
+                    navigate(
+                        route,
+                        Route::Admin {
+                            queue_id: None,
+                            request_id: None,
+                        },
+                    );
+                },
+                feedback,
+            );
+        })
+    };
+
+    rsx! {
+        section { class: "queue-page-layout",
+            div { class: "login-panel",
+                div { class: "panel-header",
+                    div {
+                        p { class: "kicker", "Admin Access" }
+                        if setup_required() == Some(true) {
+                            h2 { "Create super admin" }
+                        } else {
+                            h2 { "Sign in" }
+                        }
+                    }
+                }
+                if setup_required().is_none() {
+                    p { class: "hint", "Checking admin setup..." }
+                } else {
+                    if setup_required() == Some(true) {
+                        div { class: "input-group",
+                            label { class: "label", "Name" }
+                            input {
+                                class: "input",
+                                value: "{setup_name}",
+                                oninput: move |event| setup_name.set(event.value()),
+                                onkeydown: move |event| {
+                                    if is_enter_key(&event) {
+                                        event.prevent_default();
+                                        setup.call(());
+                                    }
+                                },
+                                placeholder: "Super Admin"
+                            }
+                        }
+                    }
+                    div { class: "input-group",
+                        label { class: "label", "Email" }
+                        input {
+                            class: "input",
+                            value: "{admin_email}",
+                            oninput: move |event| admin_email.set(event.value()),
+                            onkeydown: move |event| {
+                                if is_enter_key(&event) {
+                                    event.prevent_default();
+                                    if setup_required() == Some(true) {
+                                        setup.call(());
+                                    } else {
+                                        login.call(());
+                                    }
+                                }
+                            },
+                            placeholder: "admin@example.com"
+                        }
+                    }
+                    div { class: "input-group",
+                        label { class: "label", "Password" }
+                        input {
+                            class: "input",
+                            r#type: "password",
+                            value: "{admin_password}",
+                            oninput: move |event| admin_password.set(event.value()),
+                            onkeydown: move |event| {
+                                if is_enter_key(&event) {
+                                    event.prevent_default();
+                                    if setup_required() == Some(true) {
+                                        setup.call(());
+                                    } else {
+                                        login.call(());
+                                    }
+                                }
+                            },
+                            placeholder: "Password"
+                        }
+                    }
+                    div { class: "action-stack",
+                        if setup_required() == Some(true) {
+                            button {
+                                class: "button button-primary",
+                                onclick: move |_| setup.call(()),
+                                "Create account"
+                            }
+                        } else {
+                            button {
+                                class: "button button-primary",
+                                onclick: move |_| login.call(()),
+                                "Enter dashboard"
+                            }
+                        }
+                    }
+                }
+                if !feedback().is_empty() {
+                    p { class: "feedback", "{feedback}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 pub fn AdminPage(
     route: Signal<Route>,
     selected_queue_id: Option<String>,
@@ -35,15 +215,7 @@ pub fn AdminPage(
 ) -> Element {
     let Some(admin_session) = load_admin_session() else {
         return rsx! {
-            section { class: "empty-stage",
-                h1 { "No admin session" }
-                p { class: "lede", "Sign in first to create or manage queues." }
-                button {
-                    class: "button button-primary",
-                    onclick: move |_| navigate(route, Route::Home),
-                    "Go to login"
-                }
-            }
+            AdminAuthPage { route }
         };
     };
 
@@ -135,7 +307,13 @@ pub fn AdminPage(
                 ServerMessage::Error { message } => {
                     if message == "unknown admin session" {
                         clear_admin_session();
-                        navigate(route, Route::Home);
+                        navigate(
+                            route,
+                            Route::Admin {
+                                queue_id: None,
+                                request_id: None,
+                            },
+                        );
                     } else {
                         feedback.set(message);
                     }
@@ -188,6 +366,7 @@ pub fn AdminPage(
                         key: key.clone(),
                         label: field.label.clone(),
                         required: field.required,
+                        options: parse_field_options(&field.options_text),
                     }
                 })
                 .collect();
@@ -238,6 +417,7 @@ pub fn AdminPage(
                             key,
                             label: field.label.clone(),
                             required: field.required,
+                            options: parse_field_options(&field.options_text),
                         }
                     })
                     .collect();
@@ -659,11 +839,10 @@ pub fn AdminPage(
                     }
                 }
             } else {
-                section { class: "empty-stage",
-                    h1 { "Connecting to dashboard..." }
-                    if !feedback().is_empty() {
-                        p { class: "feedback", "{feedback}" }
-                    }
+                DelayedLoading {
+                    title: "Connecting to dashboard...".to_string(),
+                    detail: None,
+                    feedback: feedback(),
                 }
             }
         }
@@ -900,31 +1079,33 @@ fn NewQueuePage(
                     h2 { "New queue" }
                     p { class: "lede", "Set up the public join form and access mode before sharing a queue link." }
                 }
-                div { class: "button-row",
-                    label { class: "access-switch",
-                        input {
-                            r#type: "checkbox",
-                            checked: "{queue_allow_guests}",
-                            oninput: move |event| queue_allow_guests.set(event.checked())
+                div { class: "create-queue-controls",
+                    div { class: "create-queue-switches",
+                        label { class: "access-switch",
+                            input {
+                                r#type: "checkbox",
+                                checked: "{queue_allow_guests}",
+                                oninput: move |event| queue_allow_guests.set(event.checked())
+                            }
+                            span { class: "switch-track",
+                                span { class: "switch-thumb" }
+                            }
+                            span { class: "switch-label", "Guests" }
                         }
-                        span { class: "switch-track",
-                            span { class: "switch-thumb" }
+                        label { class: "access-switch",
+                            input {
+                                r#type: "checkbox",
+                                checked: "{queue_is_public}",
+                                oninput: move |event| queue_is_public.set(event.checked())
+                            }
+                            span { class: "switch-track",
+                                span { class: "switch-thumb" }
+                            }
+                            span { class: "switch-label", "Public" }
                         }
-                        span { class: "switch-label", "Guests" }
-                    }
-                    label { class: "access-switch",
-                        input {
-                            r#type: "checkbox",
-                            checked: "{queue_is_public}",
-                            oninput: move |event| queue_is_public.set(event.checked())
-                        }
-                        span { class: "switch-track",
-                            span { class: "switch-thumb" }
-                        }
-                        span { class: "switch-label", "Public" }
                     }
                     button {
-                        class: "button button-secondary",
+                        class: "button button-secondary create-queue-schedule",
                         onclick: move |_| schedule_modal_open.set(true),
                         "{schedule_button_label(&queue_schedule_mode(), &queue_opens_at(), queue_weekly_day(), &queue_weekly_time())}"
                     }
@@ -953,56 +1134,11 @@ fn NewQueuePage(
                         }
                     }
                     for (index, field) in fields().iter().enumerate() {
-                        div { class: "field-editor-row",
-                            input {
-                                class: "input",
-                                value: "{field.label}",
-                                oninput: move |event| {
-                                    let mut next = fields();
-                                    if let Some(item) = next.get_mut(index) {
-                                        item.label = event.value();
-                                    }
-                                    fields.set(next);
-                                },
-                                onkeydown: move |event| {
-                                    if is_enter_key(&event) {
-                                        event.prevent_default();
-                                        create_queue.call(());
-                                    }
-                                },
-                                placeholder: field_placeholder(index)
-                            }
-                            label { class: "field-required-toggle",
-                                input {
-                                    r#type: "checkbox",
-                                    checked: "{field.required}",
-                                    oninput: move |event| {
-                                        let mut next = fields();
-                                        if let Some(item) = next.get_mut(index) {
-                                            item.required = event.checked();
-                                        }
-                                        fields.set(next);
-                                    }
-                                }
-                                span {
-                                    if field.required {
-                                        "Required"
-                                    } else {
-                                        "Optional"
-                                    }
-                                }
-                            }
-                            button {
-                                class: "button button-secondary",
-                                onclick: move |_| {
-                                    let mut next = fields();
-                                    if index < next.len() {
-                                        next.remove(index);
-                                    }
-                                    fields.set(next);
-                                },
-                                "Remove"
-                            }
+                        FieldEditorRow {
+                            index,
+                            field: field.clone(),
+                            fields,
+                            submit: move |_| create_queue.call(()),
                         }
                     }
                 }
@@ -1158,9 +1294,12 @@ fn FieldEditorRow(
     submit: EventHandler<()>,
 ) -> Element {
     let mut fields = fields;
+    let mut options_open = use_signal(|| false);
+    let has_options = !field.options_text.trim().is_empty();
 
     rsx! {
-        div { class: "field-editor-row",
+        div { class: "field-editor-card",
+            div { class: "field-editor-row",
             input {
                 class: "input",
                 value: "{field.label}",
@@ -1200,6 +1339,15 @@ fn FieldEditorRow(
                 }
             }
             button {
+                class: if has_options { "button button-secondary field-mode-active" } else { "button button-secondary" },
+                onclick: move |_| options_open.set(!options_open()),
+                if has_options {
+                    "Dropdown"
+                } else {
+                    "Options"
+                }
+            }
+            button {
                 class: "button button-secondary",
                 onclick: move |_| {
                     let mut next = fields();
@@ -1209,6 +1357,40 @@ fn FieldEditorRow(
                     fields.set(next);
                 },
                 "Remove"
+            }
+            }
+            if options_open() {
+                div { class: "field-options-panel",
+                    div { class: "input-group",
+                        label { class: "label", "Dropdown options" }
+                        input {
+                            class: "input",
+                            value: "{field.options_text}",
+                            oninput: move |event| {
+                                let mut next = fields();
+                                if let Some(item) = next.get_mut(index) {
+                                    item.options_text = event.value();
+                                }
+                                fields.set(next);
+                            },
+                            placeholder: "High, Medium, Low"
+                        }
+                        p { class: "hint", "Comma-separated. Leave empty for a normal text field." }
+                    }
+                    if has_options {
+                        button {
+                            class: "action-button action-danger",
+                            onclick: move |_| {
+                                let mut next = fields();
+                                if let Some(item) = next.get_mut(index) {
+                                    item.options_text.clear();
+                                }
+                                fields.set(next);
+                            },
+                            "Clear options"
+                        }
+                    }
+                }
             }
         }
     }
@@ -2348,8 +2530,23 @@ fn editable_fields_from_queue(fields: &[QueueField]) -> Vec<EditableField> {
         .map(|field| EditableField {
             label: field.label.clone(),
             required: field.required,
+            options_text: field.options.join(", "),
         })
         .collect()
+}
+
+fn parse_field_options(options: &str) -> Vec<String> {
+    options
+        .split(|character| character == ',' || character == '\n')
+        .map(str::trim)
+        .filter(|option| !option.is_empty())
+        .map(str::to_string)
+        .fold(Vec::new(), |mut options, option| {
+            if !options.contains(&option) {
+                options.push(option);
+            }
+            options
+        })
 }
 
 fn request_field_value(field: &QueueField, entry: &AdminEntryView) -> String {
