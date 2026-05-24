@@ -1102,7 +1102,7 @@ code {
   gap: 14px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 0 14px;
+  padding: 14px 0;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   color: var(--muted);

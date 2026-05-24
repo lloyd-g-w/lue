@@ -480,14 +480,20 @@ async fn process_command(
             queue_id,
             values,
             user_token,
+            entry_token,
         } => {
             let mut store = state.store.write().await;
-            let token = store.join_queue(queue_id, values, user_token.as_deref())?;
+            let token = store.join_queue(
+                queue_id,
+                values,
+                user_token.as_deref(),
+                entry_token.as_deref(),
+            )?;
             store
                 .save_to_disk(&state.data_path)
                 .map_err(|error| format!("failed to save store: {error}"))?;
             queue_subscription.queue_id = Some(queue_id);
-            queue_subscription.entry_token = Some(token);
+            queue_subscription.entry_token = Some(token.clone());
             queue_subscription.user_token = user_token;
 
             if let Some((queue, your_entry)) =

@@ -83,11 +83,15 @@ pub struct Group {
 pub struct QueueEntry {
     pub id: Uuid,
     pub token: String,
+    #[serde(default)]
+    pub requester_account_id: Option<Uuid>,
     pub requester_label: String,
     pub requester_email: Option<String>,
     pub is_guest: bool,
     pub values: BTreeMap<String, String>,
     pub submitted_at: String,
+    #[serde(default)]
+    pub left_at: Option<String>,
     pub status: QueueEntryStatus,
     pub claimed_by: Option<String>,
 }

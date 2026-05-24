@@ -166,11 +166,13 @@ mod tests {
                     entries: vec![QueueEntry {
                         id: entry_id,
                         token: "entry-token".to_string(),
+                        requester_account_id: None,
                         requester_label: "Ada".to_string(),
                         requester_email: None,
                         is_guest: true,
                         values,
                         submitted_at: "2026-05-04T00:00:00Z".to_string(),
+                        left_at: None,
                         status: QueueEntryStatus::Resolved,
                         claimed_by: Some("Admin".to_string()),
                     }],

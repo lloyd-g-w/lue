@@ -67,8 +67,6 @@ pub fn AdminQueueDetail(
                                     span { class: "mono small-text", "{entry.submitted_at}" }
                                     if entry.is_guest {
                                         span { class: "row-meta", "Guest" }
-                                    } else if let Some(email) = entry.requester_email.clone() {
-                                        span { class: "row-meta", "{email}" }
                                     }
                                     if let Some(claimed_by) = entry.claimed_by.clone() {
                                         span { class: "row-meta", "Handled by {claimed_by}" }
@@ -98,8 +96,6 @@ pub fn AdminQueueDetail(
                                 span { class: "mono small-text", "{entry.submitted_at}" }
                                 if entry.is_guest {
                                     span { class: "row-meta", "Guest" }
-                                } else if let Some(email) = entry.requester_email.clone() {
-                                    span { class: "row-meta", "{email}" }
                                 }
                                 if let Some(claimed_by) = entry.claimed_by.clone() {
                                     span { class: "row-meta", "Handled by {claimed_by}" }

@@ -47,6 +47,8 @@ pub struct UserEntryView {
     pub claimed_by: Option<String>,
     pub values: BTreeMap<String, String>,
     pub submitted_at: String,
+    pub left_at: Option<String>,
+    pub rejoin_after: Option<String>,
     pub position: Option<usize>,
     pub requester_label: String,
     pub is_guest: bool,

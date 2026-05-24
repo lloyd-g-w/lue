@@ -1555,9 +1555,6 @@ fn ClosedQueueIndexPage(state: AdminStateView) -> Element {
                                                                 span { class: "table-inline-note", "Guest" }
                                                             }
                                                         }
-                                                        if let Some(email) = entry.requester_email.clone() {
-                                                            div { class: "mono small-text row-meta", "{email}" }
-                                                        }
                                                     }
                                                     for field in queue.fields.iter().cloned() {
                                                         td { "{request_field_value(&field, &entry)}" }
@@ -1826,14 +1823,11 @@ fn QueueRequestsPage(
                                 td {
                                     div { class: "table-primary",
                                         "{entry.requester_label}"
-                                        if entry.is_guest {
-                                            span { class: "table-inline-note", "Guest" }
-                                        }
-                                    }
-                                    if let Some(email) = entry.requester_email.clone() {
-                                        div { class: "mono small-text row-meta", "{email}" }
+                                    if entry.is_guest {
+                                        span { class: "table-inline-note", "Guest" }
                                     }
                                 }
+                            }
                                 for field in list_fields.iter().cloned() {
                                     td { "{request_field_value(&field, &entry)}" }
                                 }
@@ -1936,9 +1930,6 @@ fn RequestDetailPage(
                     h2 { "{entry.requester_label}" }
                     p { class: "lede",
                         "Submitted {format_timestamp(&entry.submitted_at)}"
-                        if let Some(email) = entry.requester_email.clone() {
-                            " • {email}"
-                        }
                         if entry.is_guest {
                             " • guest"
                         }

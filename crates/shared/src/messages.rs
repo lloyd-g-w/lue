@@ -111,6 +111,7 @@ pub enum ClientMessage {
         queue_id: Uuid,
         values: BTreeMap<String, String>,
         user_token: Option<String>,
+        entry_token: Option<String>,
     },
     LeaveQueue {
         queue_id: Uuid,

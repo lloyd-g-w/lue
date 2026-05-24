@@ -44,6 +44,10 @@ pub fn normalize_email(value: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+pub fn is_requester_name_key(key: &str) -> bool {
+    matches!(key, "name" | "full_name")
+}
+
 fn slugify(value: &str) -> String {
     value
         .chars()

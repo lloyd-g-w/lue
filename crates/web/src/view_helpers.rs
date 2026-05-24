@@ -17,6 +17,10 @@ pub fn slugify(value: &str) -> String {
         .replace("__", "_")
 }
 
+pub fn is_requester_name_key(key: &str) -> bool {
+    matches!(key, "name" | "full_name")
+}
+
 pub fn status_label(status: &QueueEntryStatus) -> &'static str {
     match status {
         QueueEntryStatus::Pending => "Pending",

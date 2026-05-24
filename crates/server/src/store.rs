@@ -12,7 +12,9 @@ use crate::model::{
     Account, AdminSession, ArchivedQueue, Group, Queue, QueueEntry, Store, UserSession,
 };
 use crate::password::{hash_password, verify_password};
-use crate::utils::{normalize_email, normalize_fields};
+use crate::utils::{is_requester_name_key, normalize_email, normalize_fields};
+
+const REJOIN_COOLDOWN_SECS: i64 = 10;
 
 impl Store {
     pub fn needs_initial_setup(&self) -> bool {
@@ -614,6 +616,8 @@ impl Store {
                     claimed_by: entry.claimed_by.clone(),
                     values: entry.values.clone(),
                     submitted_at: entry.submitted_at.clone(),
+                    left_at: entry.left_at.clone(),
+                    rejoin_after: Self::rejoin_after_timestamp(entry.left_at.as_deref()),
                     position: queue.position_for(entry.id),
                     requester_label: entry.requester_label.clone(),
                     is_guest: entry.is_guest,
@@ -638,11 +642,20 @@ impl Store {
         )
     }
 
+    fn rejoin_after_timestamp(left_at: Option<&str>) -> Option<String> {
+        let left_at = left_at?;
+        let left_at = chrono::DateTime::parse_from_rfc3339(left_at)
+            .ok()?
+            .with_timezone(&Utc);
+        Some((left_at + chrono::Duration::seconds(REJOIN_COOLDOWN_SECS)).to_rfc3339())
+    }
+
     pub fn join_queue(
         &mut self,
         queue_id: Uuid,
         mut values: BTreeMap<String, String>,
         user_token: Option<&str>,
+        entry_token: Option<&str>,
     ) -> Result<String, String> {
         let requester = if let Some(user_token) = user_token {
             let user = self
@@ -662,6 +675,23 @@ impl Store {
             .queues
             .get_mut(&queue_id)
             .ok_or_else(|| "queue not found".to_string())?;
+        let requester_account_id = requester
+            .as_ref()
+            .and_then(|(account_id, _, _, _)| *account_id);
+        let now = Utc::now();
+        let existing_entry_index = if let Some(account_id) = requester_account_id {
+            queue
+                .entries
+                .iter()
+                .position(|entry| entry.requester_account_id == Some(account_id))
+        } else if let Some(entry_token) = entry_token {
+            queue
+                .entries
+                .iter()
+                .position(|entry| entry.token == entry_token)
+        } else {
+            None
+        };
 
         for field in &queue.fields {
             let mut value = values
@@ -670,7 +700,7 @@ impl Store {
                 .trim()
                 .to_string();
 
-            if field.key == "name" && value.is_empty() {
+            if is_requester_name_key(&field.key) && value.is_empty() {
                 if let Some((_, requester_name, _, _)) = requester.as_ref() {
                     value = requester_name.clone();
                 }
@@ -683,21 +713,55 @@ impl Store {
             values.insert(field.key.clone(), value);
         }
 
-        let (_account_id, mut requester_label, requester_email, is_guest) =
-            if let Some(requester) = requester {
-                requester
-            } else if queue.allow_guests {
-                (None, "Guest".to_string(), None, true)
-            } else {
-                return Err("this queue requires a user account".to_string());
-            };
-
-        if let Some(name) = values
-            .get("name")
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
+        let (_, mut requester_label, requester_email, is_guest) = if let Some(requester) = requester
         {
-            requester_label = name.to_string();
+            requester
+        } else if queue.allow_guests {
+            (None, "Guest".to_string(), None, true)
+        } else {
+            return Err("this queue requires a user account".to_string());
+        };
+
+        for field in &queue.fields {
+            if is_requester_name_key(&field.key) {
+                if let Some(name) = values
+                    .get(&field.key)
+                    .map(|value| value.trim())
+                    .filter(|value| !value.is_empty())
+                {
+                    requester_label = name.to_string();
+                    break;
+                }
+            }
+        }
+
+        if let Some(index) = existing_entry_index {
+            let entry = queue.entries.get_mut(index).expect("entry index");
+            if entry.status == QueueEntryStatus::Left {
+                if let Some(left_at) = entry.left_at.as_deref() {
+                    let left_at = chrono::DateTime::parse_from_rfc3339(left_at)
+                        .map(|value| value.with_timezone(&Utc))
+                        .map_err(|error| format!("invalid leave timestamp: {error}"))?;
+                    let rejoin_at = left_at + chrono::Duration::seconds(REJOIN_COOLDOWN_SECS);
+                    if now < rejoin_at {
+                        let remaining = (rejoin_at - now).num_seconds().max(1);
+                        return Err(format!("Please wait {remaining} seconds before attempting to rejoin."));
+                    }
+                }
+
+                entry.requester_account_id = requester_account_id;
+                entry.requester_label = requester_label;
+                entry.requester_email = requester_email;
+                entry.is_guest = is_guest;
+                entry.values = values;
+                entry.submitted_at = now.to_rfc3339();
+                entry.left_at = None;
+                entry.status = QueueEntryStatus::Pending;
+                entry.claimed_by = None;
+                return Ok(entry.token.clone());
+            }
+
+            return Ok(entry.token.clone());
         }
 
         let id = Uuid::new_v4();
@@ -705,11 +769,13 @@ impl Store {
         queue.entries.push(QueueEntry {
             id,
             token: token.clone(),
+            requester_account_id,
             requester_label,
             requester_email,
             is_guest,
             values,
-            submitted_at: Utc::now().to_rfc3339(),
+            submitted_at: now.to_rfc3339(),
+            left_at: None,
             status: QueueEntryStatus::Pending,
             claimed_by: None,
         });
@@ -723,6 +789,7 @@ impl Store {
             .queues
             .get_mut(&queue_id)
             .ok_or_else(|| "queue not found".to_string())?;
+        let now = Utc::now();
 
         let Some(entry) = queue
             .entries
@@ -736,6 +803,7 @@ impl Store {
             QueueEntryStatus::Pending | QueueEntryStatus::Claimed => {
                 entry.status = QueueEntryStatus::Left;
                 entry.claimed_by = None;
+                entry.left_at = Some(now.to_rfc3339());
             }
             QueueEntryStatus::Left | QueueEntryStatus::Resolved | QueueEntryStatus::Denied => {
                 return Err("queue entry is already closed".to_string());
@@ -1408,6 +1476,71 @@ mod tests {
             .expect("second queue entry");
         assert_eq!(entry.requester_label, "Ada L.");
         assert_eq!(entry.values.get("name"), Some(&"Ada L.".to_string()));
+    }
+
+    #[test]
+    fn signed_in_join_infers_full_name_field_variations() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login admin");
+        store
+            .create_account(
+                &admin.token,
+                "Ada Lovelace".to_string(),
+                "ada@example.com".to_string(),
+                "ada-pass".to_string(),
+                AccountRole::User,
+            )
+            .expect("create user");
+        let user = store
+            .login_user("ada@example.com".to_string(), "ada-pass".to_string())
+            .expect("login user");
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                vec![QueueField {
+                    key: String::new(),
+                    label: "Full Name.".to_string(),
+                    required: true,
+                }],
+                false,
+            )
+            .expect("create queue");
+
+        store
+            .join_queue(queue_id, BTreeMap::new(), Some(&user.token))
+            .expect("join queue with inferred full name");
+        let entry = store
+            .queues
+            .get(&queue_id)
+            .and_then(|queue| queue.entries.first())
+            .expect("queue entry");
+        assert_eq!(entry.requester_label, "Ada Lovelace");
+        assert_eq!(
+            entry.values.get("full_name"),
+            Some(&"Ada Lovelace".to_string())
+        );
+
+        let mut values = BTreeMap::new();
+        values.insert("full_name".to_string(), "Ada L.".to_string());
+        store
+            .join_queue(queue_id, values, Some(&user.token))
+            .expect("join queue with custom full name");
+        let entry = store
+            .queues
+            .get(&queue_id)
+            .and_then(|queue| queue.entries.get(1))
+            .expect("second queue entry");
+        assert_eq!(entry.requester_label, "Ada L.");
     }
 
     #[test]

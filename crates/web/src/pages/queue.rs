@@ -10,7 +10,9 @@ use crate::storage::{
     clear_entry_token, clear_user_session, load_entry_token, load_user_session, save_entry_token,
     save_user_session,
 };
-use crate::view_helpers::{is_enter_key, status_class_suffix, status_label};
+use crate::view_helpers::{
+    format_timestamp, is_enter_key, is_requester_name_key, status_class_suffix, status_label,
+};
 use crate::ws::{connect_reconnecting_socket, login_user_socket, send_ws, SocketStatus};
 
 #[component]
@@ -58,9 +60,7 @@ pub fn QueuePage(queue_id: String) -> Element {
                     if let Some(entry) = entry.as_ref() {
                         if matches!(
                             entry.status,
-                            QueueEntryStatus::Left
-                                | QueueEntryStatus::Resolved
-                                | QueueEntryStatus::Denied
+                            QueueEntryStatus::Resolved | QueueEntryStatus::Denied
                         ) {
                             clear_entry_token(queue.id);
                         } else {
@@ -168,6 +168,7 @@ pub fn QueuePage(queue_id: String) -> Element {
                             queue_id: queue.id,
                             values: form_values(),
                             user_token: user_session().map(|session| session.token),
+                            entry_token: load_entry_token(queue.id),
                         },
                     );
                 }
@@ -190,21 +191,6 @@ pub fn QueuePage(queue_id: String) -> Element {
                     },
                 );
             }
-        }
-    };
-
-    let rejoin_queue = {
-        let queue_state = queue_state;
-        let mut your_entry = your_entry;
-        let mut form_values = form_values;
-        move |_| {
-            if let Some(queue) = queue_state() {
-                clear_entry_token(queue.id);
-            }
-            if let Some(entry) = your_entry() {
-                form_values.set(entry.values.clone());
-            }
-            your_entry.set(None);
         }
     };
 
@@ -238,7 +224,10 @@ pub fn QueuePage(queue_id: String) -> Element {
                             } else if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
                                 button { class: "button danger", onclick: leave_queue, "Leave queue" }
                             } else {
-                                button { class: "button button-primary", onclick: rejoin_queue, "Rejoin queue" }
+                                if let Some(rejoin_after) = entry.rejoin_after.clone() {
+                                    p { class: "hint", "Rejoin available after {format_timestamp(&rejoin_after)}." }
+                                }
+                                button { class: "button button-primary", onclick: move |_| join_queue.call(()), "Rejoin queue" }
                             }
                         }
                     } else if queue.closed_at.is_some() {
@@ -303,7 +292,7 @@ pub fn QueuePage(queue_id: String) -> Element {
                         if queue.allow_guests || user_session().is_some() {
                             div { class: "form-stack",
                                 for field in queue.fields.iter().cloned() {
-                                    if !(user_session().is_some() && field.key == "name" && !field.required) {
+                                    if !(user_session().is_some() && is_requester_name_key(&field.key)) {
                                         div { class: "input-group",
                                             label { class: "label",
                                                 "{field.label}"
