@@ -30,6 +30,7 @@ enum AdminSection {
     Queues,
     ClosedQueues,
     NewQueue,
+    SiteManagement,
     Accounts,
 }
 
@@ -238,6 +239,7 @@ pub fn AdminPage(
     let fields = use_signal(Vec::<EditableField>::new);
     let account_draft = use_signal(AccountDraft::default);
     let group_draft = use_signal(GroupDraft::default);
+    let site_title = use_signal(String::new);
     let share_account_ids = use_signal(Vec::<Uuid>::new);
     let share_group_ids = use_signal(Vec::<Uuid>::new);
     let connection_handle = use_hook(|| Rc::new(RefCell::new(None::<ReconnectingSocket>)));
@@ -260,6 +262,7 @@ pub fn AdminPage(
         let mut feedback = feedback;
         let mut connection_status = connection_status;
         let mut active_section = active_section;
+        let mut site_title = site_title;
         let mut share_account_ids = share_account_ids;
         let mut share_group_ids = share_group_ids;
         let mut socket = socket;
@@ -269,6 +272,9 @@ pub fn AdminPage(
         let connection = connect_reconnecting_socket(
             move |message| match message {
                 ServerMessage::AdminState { state } => {
+                    if site_title().is_empty() {
+                        site_title.set(state.site_settings.site_title.clone());
+                    }
                     if let Some(queue) = state.selected_queue.as_ref() {
                         share_account_ids.set(queue.shared_account_ids.clone());
                         share_group_ids.set(queue.shared_group_ids.clone());
@@ -294,6 +300,9 @@ pub fn AdminPage(
                 ServerMessage::GroupCreated => feedback.set("Group created".to_string()),
                 ServerMessage::GroupUpdated => feedback.set("Group updated".to_string()),
                 ServerMessage::GroupDeleted => feedback.set("Group deleted".to_string()),
+                ServerMessage::SiteSettingsUpdated => {
+                    feedback.set("Site settings updated".to_string())
+                }
                 ServerMessage::QueueSharingUpdated => {
                     feedback.set("Queue access updated".to_string())
                 }
@@ -585,6 +594,29 @@ pub fn AdminPage(
         }
     };
 
+    let update_site_settings = {
+        let site_title = site_title;
+        let socket = socket;
+        let mut feedback = feedback;
+        let admin_token = admin_session.token.clone();
+        move |_| {
+            if let Some(ws) = socket() {
+                feedback.set("Updating site settings...".to_string());
+                let _ = send_ws(
+                    &ws,
+                    &ClientMessage::UpdateSiteSettings {
+                        admin_token: admin_token.clone(),
+                        site_title: site_title(),
+                    },
+                );
+            } else {
+                feedback.set(
+                    "Reconnecting before site settings update. Try again in a moment.".to_string(),
+                );
+            }
+        }
+    };
+
     let update_queue_sharing = {
         let socket = socket;
         let share_account_ids = share_account_ids;
@@ -711,6 +743,7 @@ pub fn AdminPage(
     let delete_account = EventHandler::new(delete_account);
     let update_group = EventHandler::new(update_group);
     let delete_group = EventHandler::new(delete_group);
+    let update_site_settings = EventHandler::new(update_site_settings);
     let update_queue_sharing = EventHandler::new(update_queue_sharing);
     let close_queue = EventHandler::new(close_queue);
 
@@ -727,8 +760,13 @@ pub fn AdminPage(
                 .cloned()
         })
     });
+    let document_title = snapshot
+        .as_ref()
+        .map(|state| state.site_settings.site_title.clone())
+        .unwrap_or_else(|| "Lue".to_string());
 
     rsx! {
+        document::Title { "{document_title}" }
         div { class: "admin-shell",
             ConnectionBanner { status: connection_status() }
             header { class: "admin-header",
@@ -814,6 +852,7 @@ pub fn AdminPage(
                             group_draft,
                             share_account_ids,
                             share_group_ids,
+                            site_title,
                             create_queue,
                             update_queue_settings,
                             create_account,
@@ -822,6 +861,7 @@ pub fn AdminPage(
                             delete_account,
                             update_group,
                             delete_group,
+                            update_site_settings,
                             update_queue_sharing,
                             close_queue,
                             claim_entry,
@@ -866,6 +906,7 @@ fn render_admin_page(
     group_draft: Signal<GroupDraft>,
     share_account_ids: Signal<Vec<Uuid>>,
     share_group_ids: Signal<Vec<Uuid>>,
+    site_title: Signal<String>,
     create_queue: EventHandler<()>,
     update_queue_settings: EventHandler<(
         Uuid,
@@ -881,6 +922,7 @@ fn render_admin_page(
     delete_account: EventHandler<Uuid>,
     update_group: EventHandler<Uuid>,
     delete_group: EventHandler<Uuid>,
+    update_site_settings: EventHandler<()>,
     update_queue_sharing: EventHandler<Uuid>,
     close_queue: EventHandler<Uuid>,
     claim_entry: EventHandler<Uuid>,
@@ -908,6 +950,19 @@ fn render_admin_page(
                     queue_weekly_time,
                     fields,
                     create_queue,
+                }
+            },
+            AdminSection::SiteManagement if state.admin.is_super_admin => rsx! {
+                SiteManagementPage {
+                    site_title,
+                    update_site_settings,
+                }
+            },
+            AdminSection::SiteManagement => rsx! {
+                section { class: "empty-stage",
+                    p { class: "kicker", "Site" }
+                    h2 { "Super admin only" }
+                    p { class: "lede", "Site management is only available to super admins." }
                 }
             },
             AdminSection::Accounts if state.admin.is_super_admin => rsx! {
@@ -1036,6 +1091,11 @@ fn AdminNav(
                 "Closed queues"
             }
             if is_super_admin {
+                button {
+                    class: nav_button_class(active_section, AdminSection::SiteManagement),
+                    onclick: move |_| on_select.call(AdminSection::SiteManagement),
+                    "Site management"
+                }
                 button {
                     class: nav_button_class(active_section, AdminSection::Accounts),
                     onclick: move |_| on_select.call(AdminSection::Accounts),
@@ -1363,6 +1423,49 @@ fn FieldEditorRow(
                             "Clear options"
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn SiteManagementPage(
+    site_title: Signal<String>,
+    update_site_settings: EventHandler<()>,
+) -> Element {
+    let mut site_title = site_title;
+
+    rsx! {
+        section { class: "table-page-section split-view-section",
+            div { class: "panel-header",
+                div {
+                    p { class: "kicker", "Site" }
+                    h2 { "Site management" }
+                    p { class: "lede", "Manage site-wide settings for admins and queue visitors." }
+                }
+            }
+            div { class: "site-branding-row",
+                div { class: "input-group",
+                    label { class: "label", "Browser title" }
+                    input {
+                        class: "input",
+                        value: "{site_title}",
+                        maxlength: "80",
+                        oninput: move |event| site_title.set(event.value()),
+                        onkeydown: move |event| {
+                            if is_enter_key(&event) {
+                                event.prevent_default();
+                                update_site_settings.call(());
+                            }
+                        },
+                        placeholder: "Lue"
+                    }
+                }
+                UiButton {
+                    label: "Save".to_string(),
+                    variant: "primary".to_string(),
+                    onclick: move |_| update_site_settings.call(()),
                 }
             }
         }

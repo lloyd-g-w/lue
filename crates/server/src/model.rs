@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use shared::{AccountRole, QueueEntryStatus, QueueField, QueueSummary, WeeklySchedule};
+use shared::{
+    AccountRole, QueueEntryStatus, QueueField, QueueSummary, SiteSettingsView, WeeklySchedule,
+};
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
@@ -16,6 +18,7 @@ pub struct AppState {
 
 #[derive(Default)]
 pub struct Store {
+    pub site_settings: SiteSettings,
     pub accounts: HashMap<Uuid, Account>,
     pub account_email_index: HashMap<String, Uuid>,
     pub admin_sessions: HashMap<String, AdminSession>,
@@ -24,6 +27,11 @@ pub struct Store {
     pub archived_queues: HashMap<Uuid, ArchivedQueue>,
     pub groups: HashMap<Uuid, Group>,
     pub entry_index: HashMap<Uuid, Uuid>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct SiteSettings {
+    pub site_title: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -129,6 +137,22 @@ impl Account {
             self.role,
             AccountRole::SuperAdmin | AccountRole::Admin | AccountRole::User
         )
+    }
+}
+
+impl Default for SiteSettings {
+    fn default() -> Self {
+        Self {
+            site_title: "Lue".to_string(),
+        }
+    }
+}
+
+impl SiteSettings {
+    pub fn view(&self) -> SiteSettingsView {
+        SiteSettingsView {
+            site_title: self.site_title.clone(),
+        }
     }
 }
 

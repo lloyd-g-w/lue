@@ -6,11 +6,15 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::{Account, AdminSession, ArchivedQueue, Group, Queue, Store, UserSession};
+use crate::model::{
+    Account, AdminSession, ArchivedQueue, Group, Queue, SiteSettings, Store, UserSession,
+};
 use crate::password::{hash_password, is_password_hash};
 
 #[derive(Default, Deserialize, Serialize)]
 struct StoreSnapshot {
+    #[serde(default)]
+    site_settings: SiteSettings,
     accounts: HashMap<Uuid, Account>,
     queues: HashMap<Uuid, Queue>,
     #[serde(default)]
@@ -48,6 +52,7 @@ impl Store {
         }
 
         let snapshot = StoreSnapshot {
+            site_settings: self.site_settings.clone(),
             accounts: self.accounts.clone(),
             queues: self.queues.clone(),
             archived_queues: self.archived_queues.clone(),
@@ -65,6 +70,7 @@ impl Store {
 
     fn from_snapshot(snapshot: StoreSnapshot) -> io::Result<Self> {
         let mut store = Self {
+            site_settings: snapshot.site_settings,
             accounts: snapshot.accounts,
             queues: snapshot.queues,
             archived_queues: snapshot.archived_queues,

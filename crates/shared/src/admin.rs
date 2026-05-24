@@ -6,6 +6,11 @@ use uuid::Uuid;
 use crate::{AccountRole, AccountView, QueueEntryStatus, QueueField, QueueSummary};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SiteSettingsView {
+    pub site_title: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AdminIdentityView {
     pub token: String,
     pub account_id: Uuid,
@@ -67,6 +72,7 @@ pub struct AdminQueueView {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AdminStateView {
     pub admin: AdminIdentityView,
+    pub site_settings: SiteSettingsView,
     pub queues: Vec<AdminQueueListItem>,
     pub archived_queues: Vec<ArchivedQueueListItem>,
     pub selected_queue: Option<AdminQueueView>,

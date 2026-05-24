@@ -1084,8 +1084,8 @@ select.input {
 }
 
 .table-shell {
-  overflow: auto;
-  scrollbar-gutter: stable;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-raised);
@@ -1308,6 +1308,14 @@ select.input {
 
 .wide-form {
   width: 100%;
+  max-width: 48rem;
+}
+
+.site-branding-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
   max-width: 48rem;
 }
 
@@ -1656,6 +1664,7 @@ input[type="checkbox"] {
   .home-layout,
   .admin-grid,
   .account-management-grid,
+  .site-branding-row,
   .share-grid,
   .workspace-columns,
   .queue-page-layout {

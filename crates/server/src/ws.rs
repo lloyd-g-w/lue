@@ -75,11 +75,20 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                 if queue_subscription.queue_id == Some(queue_id) {
                     let store = state.store.read().await;
-                    if let Some((queue, your_entry)) = store.user_view(
-                        queue_id,
-                        queue_subscription.entry_token.as_deref(),
-                    ) {
-                        if send_message(&mut sender, &ServerMessage::QueueState { queue, your_entry }).await.is_err() {
+                    if let Some((queue, your_entry)) =
+                        store.user_view(queue_id, queue_subscription.entry_token.as_deref())
+                    {
+                        if send_message(
+                            &mut sender,
+                            &ServerMessage::QueueState {
+                                queue,
+                                your_entry,
+                                site_settings: store.site_settings_view(),
+                            },
+                        )
+                        .await
+                        .is_err()
+                        {
                             break;
                         }
                     }
@@ -115,6 +124,7 @@ async fn process_command(
                 sender,
                 &ServerMessage::PublicQueues {
                     queues: store.public_queues(),
+                    site_settings: store.site_settings_view(),
                 },
             )
             .await
@@ -133,9 +143,21 @@ async fn process_command(
                 .map_err(|error| format!("failed to save store: {error}"))?;
             admin_subscription.admin_token = Some(admin.token.clone());
 
-            send_message(sender, &ServerMessage::AdminLoggedIn { admin })
-                .await
-                .map_err(|error| error.to_string())?;
+            send_message(
+                sender,
+                &ServerMessage::AdminLoggedIn {
+                    admin: admin.clone(),
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+
+            if let Some(state_view) = store.admin_state(&admin.token, None) {
+                send_message(sender, &ServerMessage::AdminState { state: state_view })
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+
             Ok(None)
         }
         ClientMessage::LoginAdmin { email, password } => {
@@ -404,6 +426,27 @@ async fn process_command(
             }
             Ok(None)
         }
+        ClientMessage::UpdateSiteSettings {
+            admin_token,
+            site_title,
+        } => {
+            let mut store = state.store.write().await;
+            store.update_site_settings(&admin_token, site_title)?;
+            store
+                .save_to_disk(&state.data_path)
+                .map_err(|error| format!("failed to save store: {error}"))?;
+            if let Some(state_view) =
+                store.admin_state(&admin_token, admin_subscription.selected_queue_id)
+            {
+                send_message(sender, &ServerMessage::SiteSettingsUpdated)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                send_message(sender, &ServerMessage::AdminState { state: state_view })
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(None)
+        }
         ClientMessage::ShareQueue {
             admin_token,
             queue_id,
@@ -508,9 +551,16 @@ async fn process_command(
             queue_subscription.queue_id = Some(queue_id);
             queue_subscription.entry_token = entry_token;
             queue_subscription.user_token = user_token;
-            send_message(sender, &ServerMessage::QueueState { queue, your_entry })
-                .await
-                .map_err(|error| error.to_string())?;
+            send_message(
+                sender,
+                &ServerMessage::QueueState {
+                    queue,
+                    your_entry,
+                    site_settings: store.site_settings_view(),
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())?;
             Ok(None)
         }
         ClientMessage::JoinQueue {
@@ -536,9 +586,16 @@ async fn process_command(
             if let Some((queue, your_entry)) =
                 store.user_view(queue_id, queue_subscription.entry_token.as_deref())
             {
-                send_message(sender, &ServerMessage::QueueState { queue, your_entry })
-                    .await
-                    .map_err(|error| error.to_string())?;
+                send_message(
+                    sender,
+                    &ServerMessage::QueueState {
+                        queue,
+                        your_entry,
+                        site_settings: store.site_settings_view(),
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
             }
 
             Ok(Some(queue_id))
@@ -558,9 +615,16 @@ async fn process_command(
             if let Some((queue, your_entry)) =
                 store.user_view(queue_id, queue_subscription.entry_token.as_deref())
             {
-                send_message(sender, &ServerMessage::QueueState { queue, your_entry })
-                    .await
-                    .map_err(|error| error.to_string())?;
+                send_message(
+                    sender,
+                    &ServerMessage::QueueState {
+                        queue,
+                        your_entry,
+                        site_settings: store.site_settings_view(),
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
             }
 
             Ok(Some(queue_id))

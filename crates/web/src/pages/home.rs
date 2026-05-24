@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use shared::QueueSummary;
+use shared::{QueueSummary, SiteSettingsView};
 
 use crate::components::{DelayedLoading, UiButton, UiEmpty, UiHeader, UiPanel};
 use crate::models::UserSessionRecord;
@@ -15,11 +15,21 @@ pub fn HomePage(route: Signal<Route>) -> Element {
     let user_session = use_signal(load_user_session);
     let feedback = use_signal(String::new);
     let public_queues = use_signal(|| None::<Vec<QueueSummary>>);
+    let site_settings = use_signal(|| SiteSettingsView {
+        site_title: "Lue".to_string(),
+    });
 
     use_effect(move || {
         if public_queues().is_none() {
             let mut public_queues = public_queues;
-            list_public_queues_socket(move |queues| public_queues.set(Some(queues)), feedback);
+            let mut site_settings = site_settings;
+            list_public_queues_socket(
+                move |queues, settings| {
+                    site_settings.set(settings);
+                    public_queues.set(Some(queues));
+                },
+                feedback,
+            );
         }
     });
 
@@ -59,6 +69,7 @@ pub fn HomePage(route: Signal<Route>) -> Element {
     };
 
     rsx! {
+        document::Title { "{site_settings().site_title}" }
         if public_queues().is_none() {
             DelayedLoading {
                 title: "Checking queues".to_string(),

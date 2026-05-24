@@ -4,7 +4,8 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use shared::{
-    ClientMessage, QueueEntryStatus, QueueField, ServerMessage, UserEntryView, UserQueueView,
+    ClientMessage, QueueEntryStatus, QueueField, ServerMessage, SiteSettingsView, UserEntryView,
+    UserQueueView,
 };
 use uuid::Uuid;
 use web_sys::WebSocket;
@@ -26,6 +27,9 @@ use crate::ws::{
 #[component]
 pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
     let queue_state = use_signal(|| None::<UserQueueView>);
+    let site_settings = use_signal(|| SiteSettingsView {
+        site_title: "Lue".to_string(),
+    });
     let your_entry = use_signal(|| None::<UserEntryView>);
     let user_session = use_signal(load_user_session);
     let feedback = use_signal(String::new);
@@ -58,6 +62,7 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
 
     use_effect(move || {
         let mut queue_state = queue_state;
+        let mut site_settings = site_settings;
         let mut your_entry = your_entry;
         let mut feedback = feedback;
         let mut connection_status = connection_status;
@@ -74,7 +79,9 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                 ServerMessage::QueueState {
                     queue,
                     your_entry: entry,
+                    site_settings: settings,
                 } => {
+                    site_settings.set(settings);
                     if let Some(entry) = entry.as_ref() {
                         if matches!(
                             entry.status,
@@ -229,6 +236,7 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
 
     let snapshot = queue_state();
     rsx! {
+        document::Title { "{site_settings().site_title}" }
         ConnectionStatusStrip { status: connection_status() }
         if let Some(queue) = snapshot {
             {

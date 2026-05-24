@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AccountRole, AdminIdentityView, AdminStateView, QueueField, QueueSummary, UserEntryView,
-    UserIdentityView, UserQueueView, WeeklySchedule,
+    AccountRole, AdminIdentityView, AdminStateView, QueueField, QueueSummary, SiteSettingsView,
+    UserEntryView, UserIdentityView, UserQueueView, WeeklySchedule,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -83,6 +83,10 @@ pub enum ClientMessage {
         admin_token: String,
         group_id: Uuid,
     },
+    UpdateSiteSettings {
+        admin_token: String,
+        site_title: String,
+    },
     ShareQueue {
         admin_token: String,
         queue_id: Uuid,
@@ -147,6 +151,7 @@ pub enum ServerMessage {
     GroupCreated,
     GroupUpdated,
     GroupDeleted,
+    SiteSettingsUpdated,
     QueueSharingUpdated,
     QueueClosed,
     AdminState {
@@ -155,9 +160,11 @@ pub enum ServerMessage {
     QueueState {
         queue: UserQueueView,
         your_entry: Option<UserEntryView>,
+        site_settings: SiteSettingsView,
     },
     PublicQueues {
         queues: Vec<QueueSummary>,
+        site_settings: SiteSettingsView,
     },
     Info {
         message: String,

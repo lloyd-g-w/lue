@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use shared::{
     AccountRole, AccountView, AdminEntryView, AdminIdentityView, AdminQueueListItem,
     AdminQueueView, AdminStateView, ArchivedQueueListItem, GroupView, QueueEntryStatus, QueueField,
-    QueueSummary, UserEntryView, UserIdentityView, UserQueueView, WeeklySchedule,
+    QueueSummary, SiteSettingsView, UserEntryView, UserIdentityView, UserQueueView, WeeklySchedule,
 };
 use uuid::Uuid;
 
@@ -421,6 +421,30 @@ impl Store {
         Ok(())
     }
 
+    pub fn update_site_settings(
+        &mut self,
+        admin_token: &str,
+        site_title: String,
+    ) -> Result<(), String> {
+        let admin = self
+            .admin_account(admin_token)
+            .ok_or_else(|| "unknown admin session".to_string())?;
+        if !admin.is_super_admin() {
+            return Err("only the super admin can edit site settings".to_string());
+        }
+
+        let site_title = site_title.trim().to_string();
+        if site_title.is_empty() {
+            return Err("site title is required".to_string());
+        }
+        if site_title.chars().count() > 80 {
+            return Err("site title must be 80 characters or fewer".to_string());
+        }
+
+        self.site_settings.site_title = site_title;
+        Ok(())
+    }
+
     pub fn share_queue(
         &mut self,
         admin_token: &str,
@@ -572,6 +596,7 @@ impl Store {
 
         Some(AdminStateView {
             admin,
+            site_settings: self.site_settings_view(),
             queues,
             archived_queues,
             selected_queue,
@@ -1080,6 +1105,10 @@ impl Store {
             .collect();
         queues.sort_by_key(|queue| queue.name.clone());
         queues
+    }
+
+    pub fn site_settings_view(&self) -> SiteSettingsView {
+        self.site_settings.view()
     }
 
     pub fn queue_unavailable_message(&self, queue_id: Uuid) -> Option<String> {

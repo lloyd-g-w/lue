@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 pub use admin::{
     AdminEntryView, AdminIdentityView, AdminQueueListItem, AdminQueueView, AdminStateView,
-    ArchivedQueueListItem, GroupView,
+    ArchivedQueueListItem, GroupView, SiteSettingsView,
 };
 pub use messages::{ClientMessage, ServerMessage};
 pub use queue::{

@@ -52,13 +52,16 @@ pub fn check_setup_socket(
 }
 
 pub fn list_public_queues_socket(
-    mut on_public_queues: impl FnMut(Vec<shared::QueueSummary>) + 'static,
+    mut on_public_queues: impl FnMut(Vec<shared::QueueSummary>, shared::SiteSettingsView) + 'static,
     mut feedback: Signal<String>,
 ) {
     one_shot_socket(
         ClientMessage::ListPublicQueues,
         move |message| match message {
-            ServerMessage::PublicQueues { queues } => on_public_queues(queues),
+            ServerMessage::PublicQueues {
+                queues,
+                site_settings,
+            } => on_public_queues(queues, site_settings),
             ServerMessage::Error { message } => feedback.set(message),
             _ => {}
         },
