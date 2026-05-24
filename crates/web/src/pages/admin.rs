@@ -35,7 +35,10 @@ enum AdminSection {
 }
 
 #[component]
-fn AdminAuthPage(route: Signal<Route>) -> Element {
+fn AdminAuthPage(
+    route: Signal<Route>,
+    on_authenticated: EventHandler<AdminSessionRecord>,
+) -> Element {
     let mut setup_name = use_signal(String::new);
     let mut admin_email = use_signal(String::new);
     let mut admin_password = use_signal(String::new);
@@ -63,12 +66,14 @@ fn AdminAuthPage(route: Signal<Route>) -> Element {
                 admin_email(),
                 admin_password(),
                 move |admin| {
-                    save_admin_session(&AdminSessionRecord {
+                    let session = AdminSessionRecord {
                         token: admin.token.clone(),
                         name: admin.name,
                         email: admin.email,
                         is_super_admin: admin.is_super_admin,
-                    });
+                    };
+                    save_admin_session(&session);
+                    on_authenticated.call(session);
                     navigate(
                         route,
                         Route::Admin {
@@ -95,12 +100,14 @@ fn AdminAuthPage(route: Signal<Route>) -> Element {
                 admin_email(),
                 admin_password(),
                 move |admin| {
-                    save_admin_session(&AdminSessionRecord {
+                    let session = AdminSessionRecord {
                         token: admin.token.clone(),
                         name: admin.name,
                         email: admin.email,
                         is_super_admin: admin.is_super_admin,
-                    });
+                    };
+                    save_admin_session(&session);
+                    on_authenticated.call(session);
                     navigate(
                         route,
                         Route::Admin {
@@ -211,12 +218,34 @@ pub fn AdminPage(
     selected_queue_id: Option<String>,
     selected_request_id: Option<String>,
 ) -> Element {
-    let Some(admin_session) = load_admin_session() else {
-        return rsx! {
-            AdminAuthPage { route }
-        };
-    };
+    let mut admin_session = use_signal(load_admin_session);
 
+    if let Some(admin_session) = admin_session() {
+        rsx! {
+            AdminDashboardPage {
+                route,
+                selected_queue_id,
+                selected_request_id,
+                admin_session,
+            }
+        }
+    } else {
+        rsx! {
+            AdminAuthPage {
+                route,
+                on_authenticated: move |session| admin_session.set(Some(session)),
+            }
+        }
+    }
+}
+
+#[component]
+fn AdminDashboardPage(
+    route: Signal<Route>,
+    selected_queue_id: Option<String>,
+    selected_request_id: Option<String>,
+    admin_session: AdminSessionRecord,
+) -> Element {
     let selected_queue_uuid = selected_queue_id
         .as_deref()
         .and_then(|queue_id| Uuid::parse_str(queue_id).ok());
