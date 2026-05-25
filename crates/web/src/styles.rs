@@ -307,7 +307,6 @@ a {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 24px;
-  box-shadow: var(--shadow);
 }
 
 .ui-header {
