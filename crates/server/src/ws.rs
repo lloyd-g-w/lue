@@ -64,11 +64,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
                 if let Some(admin_token) = admin_subscription.admin_token.as_deref() {
                     let store = state.store.read().await;
-                    if store.admin_can_see_queue(admin_token, queue_id) {
-                        if let Some(state_view) = store.admin_state(admin_token, admin_subscription.selected_queue_id) {
-                            if send_message(&mut sender, &ServerMessage::AdminState { state: state_view }).await.is_err() {
-                                break;
-                            }
+                    if let Some(state_view) = store.admin_state(admin_token, admin_subscription.selected_queue_id) {
+                        if send_message(&mut sender, &ServerMessage::AdminState { state: state_view }).await.is_err() {
+                            break;
                         }
                     }
                 }

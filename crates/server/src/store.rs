@@ -148,6 +148,34 @@ impl Store {
         self.create_admin_session(account.id)
     }
 
+    pub fn ensure_user_account_from_microsoft(
+        &mut self,
+        email: String,
+        name: Option<String>,
+    ) -> Result<(), String> {
+        let email = normalize_email(&email)?;
+        if self.account_email_index.contains_key(&email) {
+            return Ok(());
+        }
+
+        let id = Uuid::new_v4();
+        let name = microsoft_account_name(name, &email);
+        let password_hash = hash_password(&Uuid::new_v4().to_string())?;
+        self.account_email_index.insert(email.clone(), id);
+        self.accounts.insert(
+            id,
+            Account {
+                id,
+                name,
+                email,
+                password_hash,
+                role: AccountRole::User,
+            },
+        );
+
+        Ok(())
+    }
+
     pub fn login_or_create_user_with_microsoft(
         &mut self,
         email: String,
@@ -169,21 +197,12 @@ impl Store {
             return self.create_user_session(account.id);
         }
 
-        let id = Uuid::new_v4();
-        let name = microsoft_account_name(name, &email);
-        let password_hash = hash_password(&Uuid::new_v4().to_string())?;
-        self.account_email_index.insert(email.clone(), id);
-        self.accounts.insert(
-            id,
-            Account {
-                id,
-                name,
-                email,
-                password_hash,
-                role: AccountRole::User,
-            },
-        );
-
+        self.ensure_user_account_from_microsoft(email.clone(), name)?;
+        let id = self
+            .account_email_index
+            .get(&email)
+            .copied()
+            .ok_or_else(|| "failed to create Microsoft user account".to_string())?;
         self.create_user_session(id)
     }
 
@@ -1037,9 +1056,9 @@ impl Store {
     }
 
     pub fn claim_entry(&mut self, admin_token: &str, entry_id: Uuid) -> Result<Uuid, String> {
-        let (admin_id, admin_name, is_super_admin) = self
+        let (admin_id, admin_name) = self
             .admin_account(admin_token)
-            .map(|admin| (admin.id, admin.name.clone(), admin.is_super_admin()))
+            .map(|admin| (admin.id, admin.name.clone()))
             .ok_or_else(|| "unknown admin session".to_string())?;
         let queue_id = self
             .entry_index
@@ -1048,11 +1067,15 @@ impl Store {
             .ok_or_else(|| "queue entry not found".to_string())?;
         let queue = self
             .queues
-            .get_mut(&queue_id)
+            .get(&queue_id)
             .ok_or_else(|| "queue not found".to_string())?;
-        if !(is_super_admin || queue.owner_account_id == admin_id) {
+        if !self.account_can_manage_queue(admin_id, queue) {
             return Err("you do not have access to this queue".to_string());
         }
+        let queue = self
+            .queues
+            .get_mut(&queue_id)
+            .ok_or_else(|| "queue not found".to_string())?;
 
         let entry = queue
             .entries
@@ -1071,9 +1094,9 @@ impl Store {
     }
 
     pub fn unclaim_entry(&mut self, admin_token: &str, entry_id: Uuid) -> Result<Uuid, String> {
-        let (admin_id, is_super_admin) = self
+        let admin_id = self
             .admin_account(admin_token)
-            .map(|admin| (admin.id, admin.is_super_admin()))
+            .map(|admin| admin.id)
             .ok_or_else(|| "unknown admin session".to_string())?;
         let queue_id = self
             .entry_index
@@ -1082,11 +1105,15 @@ impl Store {
             .ok_or_else(|| "queue entry not found".to_string())?;
         let queue = self
             .queues
-            .get_mut(&queue_id)
+            .get(&queue_id)
             .ok_or_else(|| "queue not found".to_string())?;
-        if !(is_super_admin || queue.owner_account_id == admin_id) {
+        if !self.account_can_manage_queue(admin_id, queue) {
             return Err("you do not have access to this queue".to_string());
         }
+        let queue = self
+            .queues
+            .get_mut(&queue_id)
+            .ok_or_else(|| "queue not found".to_string())?;
 
         let entry = queue
             .entries
@@ -1110,9 +1137,9 @@ impl Store {
         entry_id: Uuid,
         next_status: QueueEntryStatus,
     ) -> Result<Uuid, String> {
-        let (admin_id, admin_name, is_super_admin) = self
+        let (admin_id, admin_name) = self
             .admin_account(admin_token)
-            .map(|admin| (admin.id, admin.name.clone(), admin.is_super_admin()))
+            .map(|admin| (admin.id, admin.name.clone()))
             .ok_or_else(|| "unknown admin session".to_string())?;
         let queue_id = self
             .entry_index
@@ -1122,11 +1149,15 @@ impl Store {
 
         let queue = self
             .queues
-            .get_mut(&queue_id)
+            .get(&queue_id)
             .ok_or_else(|| "queue not found".to_string())?;
-        if !(is_super_admin || queue.owner_account_id == admin_id) {
+        if !self.account_can_manage_queue(admin_id, queue) {
             return Err("you do not have access to this queue".to_string());
         }
+        let queue = self
+            .queues
+            .get_mut(&queue_id)
+            .ok_or_else(|| "queue not found".to_string())?;
 
         let entry = queue
             .entries
@@ -1819,6 +1850,104 @@ mod tests {
             .expect("share queue with group");
 
         assert!(store.admin_can_see_queue(&shared.token, queue_id));
+    }
+
+    #[test]
+    fn shared_admins_can_manage_requests_but_not_share_access() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let super_admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login super admin");
+        store
+            .create_account(
+                &super_admin.token,
+                "Owner".to_string(),
+                "owner@example.com".to_string(),
+                "owner-pass".to_string(),
+                AccountRole::Admin,
+            )
+            .expect("create owner");
+        store
+            .create_account(
+                &super_admin.token,
+                "Shared".to_string(),
+                "shared@example.com".to_string(),
+                "shared-pass".to_string(),
+                AccountRole::Admin,
+            )
+            .expect("create shared admin");
+        let owner = store
+            .login_admin("owner@example.com".to_string(), "owner-pass".to_string())
+            .expect("login owner");
+        let shared = store
+            .login_admin("shared@example.com".to_string(), "shared-pass".to_string())
+            .expect("login shared");
+        let shared_account_id = store.account_email_index["shared@example.com"];
+        let queue_id = store
+            .create_queue(
+                &owner.token,
+                "Support".to_string(),
+                Vec::new(),
+                true,
+                false,
+                None,
+                None,
+            )
+            .expect("create queue");
+        store
+            .share_queue(&owner.token, queue_id, vec![shared_account_id], Vec::new())
+            .expect("share queue");
+        store
+            .join_queue(queue_id, BTreeMap::new(), None, None)
+            .expect("join queue");
+        let entry_id = store.queues[&queue_id].entries[0].id;
+
+        store
+            .claim_entry(&shared.token, entry_id)
+            .expect("shared admin claims");
+        assert_eq!(
+            store.queues[&queue_id].entries[0].status,
+            QueueEntryStatus::Claimed
+        );
+        store
+            .update_entry_status(&shared.token, entry_id, QueueEntryStatus::Resolved)
+            .expect("shared admin resolves");
+        assert_eq!(
+            store.queues[&queue_id].entries[0].status,
+            QueueEntryStatus::Resolved
+        );
+        assert!(store
+            .share_queue(&shared.token, queue_id, Vec::new(), Vec::new())
+            .is_err());
+    }
+
+    #[test]
+    fn microsoft_admin_login_creates_missing_user_account_before_admin_check() {
+        let mut store = Store::default();
+
+        let result = store
+            .ensure_user_account_from_microsoft(
+                "newadmin@example.com".to_string(),
+                Some("New Admin".to_string()),
+            )
+            .and_then(|_| store.login_admin_with_email("newadmin@example.com".to_string()));
+
+        assert_eq!(
+            result.expect_err("new Microsoft user is not admin"),
+            "this account does not have admin access"
+        );
+        let account = store
+            .account_by_email("newadmin@example.com".to_string())
+            .expect("created account");
+        assert_eq!(account.name, "New Admin");
+        assert_eq!(account.role, AccountRole::User);
     }
 
     #[test]

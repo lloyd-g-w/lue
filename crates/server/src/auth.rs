@@ -176,9 +176,15 @@ async fn microsoft_callback(
     let complete_session = {
         let mut store = state.store.write().await;
         let session = match request.kind {
-            MicrosoftAuthKind::Admin => AuthCompleteSession::Admin {
-                session: store.login_admin_with_email(profile.email)?,
-            },
+            MicrosoftAuthKind::Admin => {
+                store.ensure_user_account_from_microsoft(profile.email.clone(), profile.name)?;
+                store
+                    .save_to_disk(&state.data_path)
+                    .map_err(|error| format!("failed to save Microsoft user account: {error}"))?;
+                AuthCompleteSession::Admin {
+                    session: store.login_admin_with_email(profile.email)?,
+                }
+            }
             MicrosoftAuthKind::User => AuthCompleteSession::User {
                 session: store.login_or_create_user_with_microsoft(profile.email, profile.name)?,
             },
