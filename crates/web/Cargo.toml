@@ -23,3 +23,4 @@ web-sys = { version = "0.3", features = [
     "WebSocket",
 ] }
 js-sys = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }

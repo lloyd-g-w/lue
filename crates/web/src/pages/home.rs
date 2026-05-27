@@ -144,8 +144,9 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                     }
                 }
                 div { class: "join-code-panel",
-                    div { class: "input-group",
-                        label { class: "label", "Queue code" }
+                    div { class: "input-group join-code-input-group",
+                        label { class: "label", "Join by code" }
+
                         input {
                             class: "input code-input",
                             value: "{queue_code}",
@@ -163,11 +164,13 @@ pub fn HomePage(route: Signal<Route>) -> Element {
                         label: "Join".to_string(),
                         variant: "secondary".to_string(),
                         onclick: move |_| join_by_code.call(()),
+                        class: "join-code-button".to_string()
                     }
                 }
                 if !feedback().is_empty() && public_queues().is_some() && !auth_panel_open() {
-                    p { class: "feedback", "{feedback}" }
+                    p { class: "feedback margin-bottom", "{feedback}" }
                 }
+
                 div { class: "public-queue-list",
                     if let Some(queues) = public_queues() {
                         if queues.is_empty() {

@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
+use gloo_timers::future::TimeoutFuture;
 use shared::{
     AccountRole, AccountView, AdminEntryView, AdminQueueView, AdminStateView, ClientMessage,
     GroupView, QueueEntryStatus, QueueField, QueueSummary, ServerMessage, SiteSettingsView,
@@ -2274,6 +2275,9 @@ fn QueueRequestsPage(
     let queue_name = queue.summary.name.clone();
     let list_fields = request_list_fields(&queue.fields);
 
+    let mut copied_user_link = use_signal(|| false);
+    let mut copied_user_link_generation = use_signal(|| 0u64);
+
     rsx! {
         section { class: "table-page-section",
             div { class: "page-breadcrumbs mono small-text",
@@ -2290,7 +2294,7 @@ fn QueueRequestsPage(
                     p { class: "kicker", "Requests" }
                     h2 { "{queue.summary.name}" }
                     p { class: "lede",
-                        "Owned by {queue.owner_name} • {queue.summary.waiting_count} waiting • {queue.summary.active_count} active"
+                        "Owned by {queue.owner_name} • Join code {queue.summary.code} • {queue.summary.waiting_count} waiting • {queue.summary.active_count} active"
                     }
                     if let Some(opens_at) = queue.summary.opens_at.as_deref() {
                         p { class: "hint", "Scheduled to open {format_timestamp(opens_at)}" }
@@ -2299,7 +2303,36 @@ fn QueueRequestsPage(
                     }
                 }
                 div { class: "button-row",
-                    a { class: "button button-primary", href: queue_link, "Open user link" }
+
+                    button {
+                        class: "button button-primary copy-link-button",
+                        onclick: move |_| {
+                            let queue_link = queue_link.clone();
+
+                            let generation = copied_user_link_generation() + 1;
+                            copied_user_link_generation.set(generation);
+                            copied_user_link.set(true);
+
+                            spawn(async move {
+                                let _ = document::eval(&format!(
+                                    "navigator.clipboard.writeText({})",
+                                    serde_json::to_string(&queue_link).unwrap()
+                                ));
+
+                                TimeoutFuture::new(2000).await;
+
+                                if copied_user_link_generation() == generation {
+                                    copied_user_link.set(false);
+                                }
+                            });
+                        },
+                        if copied_user_link() {
+                            "Copied..."
+                        } else {
+                            "Copy user link"
+                        }
+                    }
+
                     button {
                         class: "button button-secondary",
                         onclick: move |_| {

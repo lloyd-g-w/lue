@@ -35,14 +35,14 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
         user_password_sign_in_enabled: true,
         user_microsoft_sign_in_enabled: true,
     });
-    let your_entry = use_signal(|| None::<UserEntryView>);
+    let mut your_entry = use_signal(|| None::<UserEntryView>);
     let user_session = use_signal(load_user_session);
-    let feedback = use_signal(String::new);
+    let mut feedback = use_signal(String::new);
     let auth_feedback = use_signal(String::new);
     let connection_status = use_signal(|| SocketStatus::Connecting);
     let mut auth_email = use_signal(String::new);
     let mut auth_password = use_signal(String::new);
-    let form_values = use_signal(BTreeMap::<String, String>::new);
+    let mut form_values = use_signal(BTreeMap::<String, String>::new);
     let socket = use_signal(|| None::<WebSocket>);
     let resolved_queue_id = use_signal(|| Uuid::parse_str(&queue_id).ok());
     let connection_handle = use_hook(|| Rc::new(RefCell::new(None::<ReconnectingSocket>)));
@@ -272,6 +272,12 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
     };
 
     let snapshot = queue_state();
+
+    let entry_resolved_or_denied = matches!(
+        your_entry().map(|entry| entry.status),
+        Some(QueueEntryStatus::Resolved | QueueEntryStatus::Denied)
+    );
+
     rsx! {
         document::Title { "{site_settings().site_title}" }
         ConnectionStatusStrip { status: connection_status() }
@@ -313,11 +319,24 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                                         variant: "danger".to_string(),
                                         onclick: leave_queue,
                                     }
-                                } else if matches!(entry.status, QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
+                                } else if entry_resolved_or_denied {
                                     UiButton {
-                                        label: "Join again".to_string(),
+                                        label: "Rejoin queue".to_string(),
                                         variant: "primary".to_string(),
-                                        onclick: move |_| join_queue.call(()),
+                                            onclick: move |_| {
+        if let (Some(queue), Some(entry)) = (queue_state(), your_entry()) {
+            clear_entry_token(queue.id);
+
+            let mut next = entry.values.clone();
+            for field in &queue.fields {
+                next.entry(field.key.clone()).or_default();
+            }
+
+            form_values.set(next);
+            your_entry.set(None);
+            feedback.set(String::new());
+        }
+    },
                                     }
                                 } else {
                                     p { class: "hint", "This request is no longer active." }
@@ -333,7 +352,7 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                     }
                 }
 
-                if queue.closed_at.is_none() && should_show_join_form(your_entry()) {
+                if queue.closed_at.is_none() && should_show_join_form(your_entry()) &&  !entry_resolved_or_denied {
                     UiPanel { class: "queue-form-panel".to_string(),
                         div { class: "join-panel-status",
                             span { class: "counter-pill", "{queue.waiting_count} waiting" }

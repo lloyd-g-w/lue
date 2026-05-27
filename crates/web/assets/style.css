@@ -1,4 +1,3 @@
-pub const APP_CSS: &str = r#"
 :root {
   color-scheme: light;
   --bg: #f3f6f2;
@@ -115,9 +114,9 @@ a {
 }
 
 .shell {
-  max-width: 90rem;
+  max-width: 95rem;
   margin: 0 auto;
-  padding: clamp(1rem, 2vw, 1.5rem) clamp(1rem, 2vw, 1.5rem) 4rem;
+  padding: clamp(1rem, 2vw, 1.5rem) clamp(0.5rem, 2vw, 2rem) 4rem;
 }
 
 .toast-stack {
@@ -437,7 +436,6 @@ a {
 
 .home-main {
   display: grid;
-  gap: 16px;
   min-width: 0;
 }
 
@@ -448,7 +446,6 @@ a {
   justify-content: flex-start;
   flex-wrap: wrap;
   padding-bottom: 14px;
-  border-bottom: 1px solid var(--line);
   text-align: left;
 }
 
@@ -481,7 +478,6 @@ a {
 .sidebar-block,
 .admin-nav,
 .point-list,
-.public-queue-list,
 .field-list,
 .list-shell,
 .detail-list,
@@ -1178,7 +1174,7 @@ select.input {
 .feedback {
   color: var(--danger);
   font-weight: 600;
-  margin: 10px 0 0 0;
+  margin: 0;
   padding: 0.9rem 1rem;
   border: 1px solid var(--feedback-border);
   border-radius: var(--radius);
@@ -1992,4 +1988,28 @@ input[type="checkbox"] {
     grid-template-columns: 1fr;
   }
 }
-"#;
+
+  .copy-link-button {
+    min-width: 9rem;
+  }
+
+  .join-code-input-group {
+    width: 90%;
+  }
+  .join-code-panel {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 20px;
+    display: flex;
+    align-items: end;
+    gap: 0.75rem;
+  }
+
+  .join-code-button {
+    padding: 14px 15px;
+  }
+
+  .margin-bottom {
+    margin-bottom: 20px;
+  }
+
+}

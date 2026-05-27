@@ -136,7 +136,7 @@ async fn process_command(
             let store = state.store.read().await;
             let queue_id = store
                 .queue_id_for_code(&code)
-                .ok_or_else(|| "queue code not found".to_string())?;
+                .ok_or_else(|| "Queue code not found".to_string())?;
             send_message(sender, &ServerMessage::QueueCodeResolved { queue_id })
                 .await
                 .map_err(|error| error.to_string())?;

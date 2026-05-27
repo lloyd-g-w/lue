@@ -4,7 +4,6 @@ mod models;
 mod pages;
 mod route;
 mod storage;
-mod styles;
 mod view_helpers;
 mod ws;
 

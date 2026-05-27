@@ -11,8 +11,9 @@ use wasm_bindgen::JsCast;
 use crate::pages::{AdminPage, HomePage, QueuePage};
 use crate::route::{replace_route, Route};
 use crate::storage::{load_dark_theme, save_admin_session, save_dark_theme, save_user_session};
-use crate::styles::APP_CSS;
 use crate::{models::AdminSessionRecord, models::UserSessionRecord};
+
+static APP_CSS: Asset = asset!("/assets/style.css");
 
 #[component]
 pub fn App() -> Element {
@@ -69,8 +70,12 @@ pub fn App() -> Element {
 
     rsx! {
         document::Title { "Lue" }
+        document::Link {
+            rel: "icon",
+            href: asset!("/assets/favicon.svg")
+        }
         document::Stylesheet { href: "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" }
-        style { {APP_CSS} }
+        document::Stylesheet { href: APP_CSS }
         button {
             class: if dark_theme() { "theme-toggle theme-toggle-dark" } else { "theme-toggle" },
             title: if dark_theme() { "Use light theme" } else { "Use dark theme" },
