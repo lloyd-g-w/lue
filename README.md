@@ -10,6 +10,10 @@ This repository contains a small full-stack queue system:
 
 - The first deployment prompts you to create the initial super admin account.
 - The super admin can create `admin` and `user` email/password accounts from the dashboard.
+  Admin Microsoft SSO requires an existing admin account, while user Microsoft SSO can create a
+  local user account from the verified Microsoft profile.
+- The super admin can enable or disable password and Microsoft sign-in separately for admins and
+  users from Site management.
 - An admin creates a queue with a queue name, any number of required fields, and an `allow guests` setting.
 - A user opens the queue link, signs in if required, or joins as a guest if that queue allows it.
 - The admin sees the live queue, can inspect individual entries, and can `claim`, `unclaim`, `resolve`, or `deny` them.
@@ -45,6 +49,31 @@ different file:
 DATA_PATH=/path/to/store.json cargo run -p server
 ```
 
+## Microsoft SSO
+
+Microsoft SSO is enabled when the backend has these environment variables. Local `cargo run -p server`
+loads them from `.env` if that file exists:
+
+```bash
+MICROSOFT_CLIENT_ID=<application-client-id>
+MICROSOFT_CLIENT_SECRET=<client-secret>
+MICROSOFT_TENANT_ID=<tenant-id-or-common>
+SERVER_PUBLIC_BASE_URL=http://127.0.0.1:3000
+FRONTEND_BASE_URL=http://127.0.0.1:8080
+```
+
+Register this redirect URI in Microsoft Entra ID:
+
+```text
+${SERVER_PUBLIC_BASE_URL}/auth/microsoft/callback
+```
+
+For Docker Compose on `http://127.0.0.1:8081`, set `SERVER_PUBLIC_BASE_URL` and
+`FRONTEND_BASE_URL` to `http://127.0.0.1:8081` and use
+`http://127.0.0.1:8081/auth/microsoft/callback` as the redirect URI. Microsoft SSO does not
+auto-provision accounts; create the account first in Lue, then users can sign in with Microsoft
+using that same email address.
+
 ## Run with Docker Compose
 
 Build and start the full app:
@@ -62,7 +91,8 @@ http://127.0.0.1:8081
 Compose runs two containers:
 
 - `server`: the Axum backend, listening inside Docker on `0.0.0.0:3000`
-- `web`: nginx serving the Dioxus static build and proxying `/ws` and `/health` to `server`
+- `web`: nginx serving the Dioxus static build and proxying `/ws`, `/health`, and
+  `/auth/microsoft/*` to `server`
 
 Persistent data is stored in the named Docker volume `lue-data` at `/data/store.json` inside
 the server container. To stop the app without deleting data:

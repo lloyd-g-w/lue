@@ -4,6 +4,7 @@ use web_sys::window;
 #[derive(Clone, PartialEq)]
 pub enum Route {
     Home,
+    MicrosoftAuthComplete,
     Admin {
         queue_id: Option<String>,
         request_id: Option<String>,
@@ -18,9 +19,13 @@ impl Route {
         let path = window()
             .and_then(|browser| browser.location().pathname().ok())
             .unwrap_or_else(|| "/".to_string());
+        Self::from_path(&path)
+    }
 
+    pub fn from_path(path: &str) -> Self {
         let parts: Vec<_> = path.trim_matches('/').split('/').collect();
         match parts.as_slice() {
+            ["auth", "microsoft", "complete"] => Route::MicrosoftAuthComplete,
             ["admin"] => Route::Admin {
                 queue_id: None,
                 request_id: None,
@@ -47,6 +52,7 @@ impl Route {
     pub fn path(&self) -> String {
         match self {
             Route::Home => "/".to_string(),
+            Route::MicrosoftAuthComplete => "/auth/microsoft/complete".to_string(),
             Route::Admin {
                 queue_id: None,
                 request_id: None,
@@ -72,6 +78,15 @@ pub fn navigate(mut route_signal: Signal<Route>, route: Route) {
     if let Some(browser) = window() {
         let _ = browser.history().and_then(|history| {
             history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&route.path()))
+        });
+    }
+    route_signal.set(route);
+}
+
+pub fn replace_route(mut route_signal: Signal<Route>, route: Route) {
+    if let Some(browser) = window() {
+        let _ = browser.history().and_then(|history| {
+            history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&route.path()))
         });
     }
     route_signal.set(route);

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,6 +14,8 @@ pub struct AppState {
     pub store: Arc<RwLock<Store>>,
     pub updates: broadcast::Sender<Uuid>,
     pub data_path: PathBuf,
+    pub microsoft_auth: Option<Arc<MicrosoftAuthConfig>>,
+    pub microsoft_auth_requests: Arc<RwLock<HashMap<String, MicrosoftAuthRequest>>>,
 }
 
 #[derive(Default)]
@@ -25,6 +27,7 @@ pub struct Store {
     pub user_sessions: HashMap<String, UserSession>,
     pub queues: HashMap<Uuid, Queue>,
     pub archived_queues: HashMap<Uuid, ArchivedQueue>,
+    pub queue_code_index: HashMap<String, Uuid>,
     pub groups: HashMap<Uuid, Group>,
     pub entry_index: HashMap<Uuid, Uuid>,
 }
@@ -32,6 +35,14 @@ pub struct Store {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SiteSettings {
     pub site_title: String,
+    #[serde(default = "default_true")]
+    pub admin_password_sign_in_enabled: bool,
+    #[serde(default = "default_true")]
+    pub admin_microsoft_sign_in_enabled: bool,
+    #[serde(default = "default_true")]
+    pub user_password_sign_in_enabled: bool,
+    #[serde(default = "default_true")]
+    pub user_microsoft_sign_in_enabled: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -59,6 +70,8 @@ pub struct UserSession {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Queue {
     pub id: Uuid,
+    #[serde(default)]
+    pub code: String,
     pub name: String,
     pub allow_guests: bool,
     #[serde(default)]
@@ -123,6 +136,29 @@ pub struct QueueSubscription {
     pub user_token: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct MicrosoftAuthConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub tenant_id: String,
+    pub redirect_uri: String,
+    pub frontend_base_url: String,
+    pub http_client: reqwest::Client,
+}
+
+#[derive(Clone)]
+pub struct MicrosoftAuthRequest {
+    pub kind: MicrosoftAuthKind,
+    pub return_to: String,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MicrosoftAuthKind {
+    Admin,
+    User,
+}
+
 impl Account {
     pub fn is_super_admin(&self) -> bool {
         self.role == AccountRole::SuperAdmin
@@ -144,6 +180,10 @@ impl Default for SiteSettings {
     fn default() -> Self {
         Self {
             site_title: "Lue".to_string(),
+            admin_password_sign_in_enabled: true,
+            admin_microsoft_sign_in_enabled: true,
+            user_password_sign_in_enabled: true,
+            user_microsoft_sign_in_enabled: true,
         }
     }
 }
@@ -152,11 +192,42 @@ impl SiteSettings {
     pub fn view(&self) -> SiteSettingsView {
         SiteSettingsView {
             site_title: self.site_title.clone(),
+            admin_password_sign_in_enabled: self.admin_password_sign_in_enabled,
+            admin_microsoft_sign_in_enabled: self.admin_microsoft_sign_in_enabled,
+            user_password_sign_in_enabled: self.user_password_sign_in_enabled,
+            user_microsoft_sign_in_enabled: self.user_microsoft_sign_in_enabled,
         }
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Queue {
+    pub fn normalize_code(value: &str) -> String {
+        value
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .map(|character| character.to_ascii_uppercase())
+            .collect()
+    }
+
+    pub fn new_code(existing_codes: &HashSet<String>) -> String {
+        loop {
+            let candidate: String = Uuid::new_v4()
+                .simple()
+                .to_string()
+                .chars()
+                .take(6)
+                .map(|character| character.to_ascii_uppercase())
+                .collect();
+            if !existing_codes.contains(&candidate) {
+                return candidate;
+            }
+        }
+    }
+
     pub fn waiting_count(&self) -> usize {
         self.entries
             .iter()
@@ -199,6 +270,7 @@ impl Queue {
     pub fn summary(&self) -> QueueSummary {
         QueueSummary {
             id: self.id,
+            code: self.code.clone(),
             name: self.name.clone(),
             allow_guests: self.allow_guests,
             is_public: self.is_public,

@@ -12,6 +12,9 @@ use crate::{
 pub enum ClientMessage {
     CheckSetup,
     ListPublicQueues,
+    ResolveQueueCode {
+        code: String,
+    },
     SetupSuperAdmin {
         name: String,
         email: String,
@@ -86,6 +89,10 @@ pub enum ClientMessage {
     UpdateSiteSettings {
         admin_token: String,
         site_title: String,
+        admin_password_sign_in_enabled: bool,
+        admin_microsoft_sign_in_enabled: bool,
+        user_password_sign_in_enabled: bool,
+        user_microsoft_sign_in_enabled: bool,
     },
     ShareQueue {
         admin_token: String,
@@ -113,6 +120,10 @@ pub enum ClientMessage {
         admin_token: String,
         entry_id: Uuid,
     },
+    ReopenEntry {
+        admin_token: String,
+        entry_id: Uuid,
+    },
     SubscribeQueue {
         queue_id: Uuid,
         entry_token: Option<String>,
@@ -134,6 +145,7 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     SetupState {
         needs_setup: bool,
+        site_settings: SiteSettingsView,
     },
     AdminLoggedIn {
         admin: AdminIdentityView,
@@ -142,6 +154,9 @@ pub enum ServerMessage {
         user: UserIdentityView,
     },
     QueueCreated {
+        queue_id: Uuid,
+    },
+    QueueCodeResolved {
         queue_id: Uuid,
     },
     QueueSettingsUpdated,

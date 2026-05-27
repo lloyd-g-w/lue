@@ -30,6 +30,7 @@ pub enum QueueEntryStatus {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct QueueSummary {
     pub id: Uuid,
+    pub code: String,
     pub name: String,
     pub allow_guests: bool,
     pub is_public: bool,
@@ -42,6 +43,7 @@ pub struct QueueSummary {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct UserQueueView {
     pub id: Uuid,
+    pub code: String,
     pub name: String,
     pub fields: Vec<QueueField>,
     pub allow_guests: bool,

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use shared::{
@@ -27,6 +27,20 @@ fn weekday_label(weekday: u8) -> &'static str {
         6 => "Saturday",
         _ => "Unknown",
     }
+}
+
+fn microsoft_account_name(name: Option<String>, email: &str) -> String {
+    let name = name.unwrap_or_default().trim().to_string();
+    if !name.is_empty() {
+        return name;
+    }
+
+    email
+        .split_once('@')
+        .map(|(local_part, _)| local_part)
+        .unwrap_or(email)
+        .trim()
+        .to_string()
 }
 
 impl Store {
@@ -95,22 +109,15 @@ impl Store {
         email: String,
         password: String,
     ) -> Result<AdminIdentityView, String> {
+        if !self.site_settings.admin_password_sign_in_enabled {
+            return Err("admin password sign-in is disabled".to_string());
+        }
         let account = self.authenticate_account(email, password)?;
         if !account.can_administer() {
             return Err("this account does not have admin access".to_string());
         }
 
-        let token = Uuid::new_v4().to_string();
-        self.admin_sessions.insert(
-            token.clone(),
-            AdminSession {
-                token: token.clone(),
-                account_id: account.id,
-            },
-        );
-
-        self.admin_identity(&token)
-            .ok_or_else(|| "failed to create admin session".to_string())
+        self.create_admin_session(account.id)
     }
 
     pub fn login_user(
@@ -118,22 +125,66 @@ impl Store {
         email: String,
         password: String,
     ) -> Result<UserIdentityView, String> {
+        if !self.site_settings.user_password_sign_in_enabled {
+            return Err("user password sign-in is disabled".to_string());
+        }
         let account = self.authenticate_account(email, password)?;
         if !account.can_join_queues() {
             return Err("use a user account to join queues".to_string());
         }
 
-        let token = Uuid::new_v4().to_string();
-        self.user_sessions.insert(
-            token.clone(),
-            UserSession {
-                token: token.clone(),
-                account_id: account.id,
+        self.create_user_session(account.id)
+    }
+
+    pub fn login_admin_with_email(&mut self, email: String) -> Result<AdminIdentityView, String> {
+        if !self.site_settings.admin_microsoft_sign_in_enabled {
+            return Err("admin Microsoft sign-in is disabled".to_string());
+        }
+        let account = self.account_by_email(email)?;
+        if !account.can_administer() {
+            return Err("this account does not have admin access".to_string());
+        }
+
+        self.create_admin_session(account.id)
+    }
+
+    pub fn login_or_create_user_with_microsoft(
+        &mut self,
+        email: String,
+        name: Option<String>,
+    ) -> Result<UserIdentityView, String> {
+        if !self.site_settings.user_microsoft_sign_in_enabled {
+            return Err("user Microsoft sign-in is disabled".to_string());
+        }
+        let email = normalize_email(&email)?;
+        if let Some(account_id) = self.account_email_index.get(&email).copied() {
+            let account = self
+                .accounts
+                .get(&account_id)
+                .ok_or_else(|| "no local account matches this Microsoft email".to_string())?;
+            if !account.can_join_queues() {
+                return Err("use a user account to join queues".to_string());
+            }
+
+            return self.create_user_session(account.id);
+        }
+
+        let id = Uuid::new_v4();
+        let name = microsoft_account_name(name, &email);
+        let password_hash = hash_password(&Uuid::new_v4().to_string())?;
+        self.account_email_index.insert(email.clone(), id);
+        self.accounts.insert(
+            id,
+            Account {
+                id,
+                name,
+                email,
+                password_hash,
+                role: AccountRole::User,
             },
         );
 
-        self.user_identity(&token)
-            .ok_or_else(|| "failed to create user session".to_string())
+        self.create_user_session(id)
     }
 
     pub fn create_account(
@@ -285,10 +336,22 @@ impl Store {
         let weekly_schedule = Self::normalize_weekly_schedule(weekly_schedule)?;
 
         let id = Uuid::new_v4();
+        let existing_codes: HashSet<String> = self
+            .queues
+            .values()
+            .map(|queue| queue.code.clone())
+            .chain(
+                self.archived_queues
+                    .values()
+                    .map(|archive| archive.queue.code.clone()),
+            )
+            .collect();
+        let code = Queue::new_code(&existing_codes);
         self.queues.insert(
             id,
             Queue {
                 id,
+                code: code.clone(),
                 name: normalized_name,
                 allow_guests,
                 is_public,
@@ -302,6 +365,7 @@ impl Store {
                 entries: Vec::new(),
             },
         );
+        self.queue_code_index.insert(code, id);
         Ok(id)
     }
 
@@ -425,6 +489,10 @@ impl Store {
         &mut self,
         admin_token: &str,
         site_title: String,
+        admin_password_sign_in_enabled: bool,
+        admin_microsoft_sign_in_enabled: bool,
+        user_password_sign_in_enabled: bool,
+        user_microsoft_sign_in_enabled: bool,
     ) -> Result<(), String> {
         let admin = self
             .admin_account(admin_token)
@@ -442,6 +510,10 @@ impl Store {
         }
 
         self.site_settings.site_title = site_title;
+        self.site_settings.admin_password_sign_in_enabled = admin_password_sign_in_enabled;
+        self.site_settings.admin_microsoft_sign_in_enabled = admin_microsoft_sign_in_enabled;
+        self.site_settings.user_password_sign_in_enabled = user_password_sign_in_enabled;
+        self.site_settings.user_microsoft_sign_in_enabled = user_microsoft_sign_in_enabled;
         Ok(())
     }
 
@@ -493,6 +565,8 @@ impl Store {
             .queues
             .remove(&queue_id)
             .ok_or_else(|| "queue not found".to_string())?;
+        self.queue_code_index
+            .remove(&Queue::normalize_code(&queue.code));
         for entry in &queue.entries {
             self.entry_index.remove(&entry.id);
         }
@@ -688,6 +762,7 @@ impl Store {
         (
             UserQueueView {
                 id: queue.id,
+                code: queue.code.clone(),
                 name: queue.name.clone(),
                 fields: queue.fields.clone(),
                 allow_guests: queue.allow_guests,
@@ -1070,6 +1145,14 @@ impl Store {
                 entry.status = next_status;
                 Ok(queue_id)
             }
+            (QueueEntryStatus::Resolved, QueueEntryStatus::Pending)
+            | (QueueEntryStatus::Denied, QueueEntryStatus::Pending)
+                if entry.left_at.is_none() =>
+            {
+                entry.status = QueueEntryStatus::Pending;
+                entry.claimed_by = None;
+                Ok(queue_id)
+            }
             _ => Err("invalid status transition".to_string()),
         }
     }
@@ -1116,6 +1199,12 @@ impl Store {
         (!Self::queue_is_open(queue)).then(|| Self::queue_not_open_message(queue))
     }
 
+    pub fn queue_id_for_code(&self, code: &str) -> Option<Uuid> {
+        self.queue_code_index
+            .get(&Queue::normalize_code(code))
+            .copied()
+    }
+
     pub fn admin_identity(&self, admin_token: &str) -> Option<AdminIdentityView> {
         let session = self.admin_sessions.get(admin_token)?;
         let admin = self.accounts.get(&session.account_id)?;
@@ -1153,6 +1242,46 @@ impl Store {
             return Err("invalid email or password".to_string());
         }
         Ok(account)
+    }
+
+    fn account_by_email(&self, email: String) -> Result<&Account, String> {
+        let email = normalize_email(&email)?;
+        let account_id = self
+            .account_email_index
+            .get(&email)
+            .copied()
+            .ok_or_else(|| "no local account matches this Microsoft email".to_string())?;
+        self.accounts
+            .get(&account_id)
+            .ok_or_else(|| "no local account matches this Microsoft email".to_string())
+    }
+
+    fn create_admin_session(&mut self, account_id: Uuid) -> Result<AdminIdentityView, String> {
+        let token = Uuid::new_v4().to_string();
+        self.admin_sessions.insert(
+            token.clone(),
+            AdminSession {
+                token: token.clone(),
+                account_id,
+            },
+        );
+
+        self.admin_identity(&token)
+            .ok_or_else(|| "failed to create admin session".to_string())
+    }
+
+    fn create_user_session(&mut self, account_id: Uuid) -> Result<UserIdentityView, String> {
+        let token = Uuid::new_v4().to_string();
+        self.user_sessions.insert(
+            token.clone(),
+            UserSession {
+                token: token.clone(),
+                account_id,
+            },
+        );
+
+        self.user_identity(&token)
+            .ok_or_else(|| "failed to create user session".to_string())
     }
 
     fn admin_account(&self, admin_token: &str) -> Option<&Account> {
@@ -1351,6 +1480,201 @@ mod tests {
                 "second-super-pass".to_string()
             )
             .is_ok());
+    }
+
+    #[test]
+    fn microsoft_user_login_creates_missing_user_account() {
+        let mut store = Store::default();
+
+        let user = store
+            .login_or_create_user_with_microsoft(
+                " Ada@Example.COM ".to_string(),
+                Some("Ada Lovelace".to_string()),
+            )
+            .expect("create user from Microsoft login");
+
+        assert_eq!(user.email, "ada@example.com");
+        assert_eq!(user.name, "Ada Lovelace");
+        assert!(store.user_identity(&user.token).is_some());
+
+        let account_id = store
+            .account_email_index
+            .get("ada@example.com")
+            .copied()
+            .expect("created account id");
+        let account = store.accounts.get(&account_id).expect("created account");
+        assert_eq!(account.role, AccountRole::User);
+        assert_eq!(account.email, "ada@example.com");
+        assert_eq!(account.name, "Ada Lovelace");
+        assert!(is_password_hash(&account.password_hash));
+    }
+
+    #[test]
+    fn microsoft_user_login_reuses_existing_account() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login super admin");
+        store
+            .create_account(
+                &admin.token,
+                "Existing User".to_string(),
+                "user@example.com".to_string(),
+                "user-pass".to_string(),
+                AccountRole::User,
+            )
+            .expect("create existing user");
+
+        let user = store
+            .login_or_create_user_with_microsoft(
+                "user@example.com".to_string(),
+                Some("Changed Name".to_string()),
+            )
+            .expect("login existing user from Microsoft");
+
+        assert_eq!(user.name, "Existing User");
+        assert_eq!(store.accounts.len(), 2);
+    }
+
+    #[test]
+    fn disabled_sign_in_methods_are_rejected() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        store.site_settings.admin_password_sign_in_enabled = false;
+        store.site_settings.admin_microsoft_sign_in_enabled = false;
+        store.site_settings.user_password_sign_in_enabled = false;
+        store.site_settings.user_microsoft_sign_in_enabled = false;
+
+        assert_eq!(
+            store
+                .login_admin("super@example.com".to_string(), "super-pass".to_string())
+                .expect_err("admin password disabled"),
+            "admin password sign-in is disabled"
+        );
+        assert_eq!(
+            store
+                .login_admin_with_email("super@example.com".to_string())
+                .expect_err("admin Microsoft disabled"),
+            "admin Microsoft sign-in is disabled"
+        );
+        assert_eq!(
+            store
+                .login_user("super@example.com".to_string(), "super-pass".to_string())
+                .expect_err("user password disabled"),
+            "user password sign-in is disabled"
+        );
+        assert_eq!(
+            store
+                .login_or_create_user_with_microsoft(
+                    "user@example.com".to_string(),
+                    Some("User".to_string())
+                )
+                .expect_err("user Microsoft disabled"),
+            "user Microsoft sign-in is disabled"
+        );
+    }
+
+    #[test]
+    fn queues_get_join_codes_that_resolve_to_queue_ids() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login super admin");
+
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                Vec::new(),
+                true,
+                false,
+                None,
+                None,
+            )
+            .expect("create queue");
+        let queue = store.queues.get(&queue_id).expect("queue");
+
+        assert_eq!(queue.code.len(), 6);
+        assert_eq!(store.queue_id_for_code(&queue.code), Some(queue_id));
+        assert_eq!(
+            store.queue_id_for_code(&queue.code.to_ascii_lowercase()),
+            Some(queue_id)
+        );
+        assert_eq!(queue.summary().code, queue.code);
+    }
+
+    #[test]
+    fn resolved_or_denied_entries_can_be_reopened_if_not_left() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login super admin");
+        let queue_id = store
+            .create_queue(
+                &admin.token,
+                "Support".to_string(),
+                Vec::new(),
+                true,
+                false,
+                None,
+                None,
+            )
+            .expect("create queue");
+
+        store
+            .join_queue(queue_id, BTreeMap::new(), None, None)
+            .expect("join queue");
+        let entry_id = store.queues[&queue_id].entries[0].id;
+
+        store
+            .update_entry_status(&admin.token, entry_id, QueueEntryStatus::Resolved)
+            .expect("resolve entry");
+        store
+            .update_entry_status(&admin.token, entry_id, QueueEntryStatus::Pending)
+            .expect("reopen resolved entry");
+        assert_eq!(
+            store.queues[&queue_id].entries[0].status,
+            QueueEntryStatus::Pending
+        );
+        assert_eq!(store.queues[&queue_id].entries[0].claimed_by, None);
+
+        store
+            .update_entry_status(&admin.token, entry_id, QueueEntryStatus::Denied)
+            .expect("deny entry");
+        store
+            .update_entry_status(&admin.token, entry_id, QueueEntryStatus::Pending)
+            .expect("reopen denied entry");
+        assert_eq!(
+            store.queues[&queue_id].entries[0].status,
+            QueueEntryStatus::Pending
+        );
     }
 
     #[test]

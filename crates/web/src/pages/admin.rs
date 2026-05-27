@@ -4,7 +4,7 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use shared::{
     AccountRole, AccountView, AdminEntryView, AdminQueueView, AdminStateView, ClientMessage,
-    GroupView, QueueEntryStatus, QueueField, QueueSummary, ServerMessage,
+    GroupView, QueueEntryStatus, QueueField, QueueSummary, ServerMessage, SiteSettingsView,
 };
 use uuid::Uuid;
 use web_sys::WebSocket;
@@ -21,7 +21,7 @@ use crate::view_helpers::{
     weekday_name, weekly_schedule_label,
 };
 use crate::ws::{
-    check_setup_socket, connect_reconnecting_socket, login_admin_socket, send_ws,
+    backend_http_url, check_setup_socket, connect_reconnecting_socket, login_admin_socket, send_ws,
     setup_super_admin_socket, ReconnectingSocket, SocketStatus,
 };
 
@@ -43,13 +43,24 @@ fn AdminAuthPage(
     let mut admin_email = use_signal(String::new);
     let mut admin_password = use_signal(String::new);
     let setup_required = use_signal(|| None::<bool>);
+    let site_settings = use_signal(|| SiteSettingsView {
+        site_title: "Lue".to_string(),
+        admin_password_sign_in_enabled: true,
+        admin_microsoft_sign_in_enabled: true,
+        user_password_sign_in_enabled: true,
+        user_microsoft_sign_in_enabled: true,
+    });
     let feedback = use_signal(String::new);
 
     use_effect(move || {
         if setup_required().is_none() {
             let mut setup_required = setup_required;
+            let mut site_settings = site_settings;
             check_setup_socket(
-                move |needs_setup| setup_required.set(Some(needs_setup)),
+                move |needs_setup, settings| {
+                    setup_required.set(Some(needs_setup));
+                    site_settings.set(settings);
+                },
                 feedback,
             );
         }
@@ -120,6 +131,17 @@ fn AdminAuthPage(
             );
         })
     };
+    let sign_in_with_microsoft = move |_| {
+        if let Some(window) = web_sys::window() {
+            let return_to = window
+                .location()
+                .pathname()
+                .unwrap_or_else(|_| "/admin".to_string());
+            let _ = window.location().set_href(&backend_http_url(&format!(
+                "/auth/microsoft/start?kind=admin&return_to={return_to}"
+            )));
+        }
+    };
 
     rsx! {
         section { class: "queue-page-layout",
@@ -134,7 +156,7 @@ fn AdminAuthPage(
                 } else {
                     if setup_required() == Some(true) {
                         div { class: "input-group",
-                            label { class: "label", "Name" }
+                            label { class: "label", "Full Name" }
                             input {
                                 class: "input",
                                 value: "{setup_name}",
@@ -149,43 +171,45 @@ fn AdminAuthPage(
                             }
                         }
                     }
-                    div { class: "input-group",
-                        label { class: "label", "Email" }
-                        input {
-                            class: "input",
-                            value: "{admin_email}",
-                            oninput: move |event| admin_email.set(event.value()),
-                            onkeydown: move |event| {
-                                if is_enter_key(&event) {
-                                    event.prevent_default();
-                                    if setup_required() == Some(true) {
-                                        setup.call(());
-                                    } else {
-                                        login.call(());
+                    if setup_required() == Some(true) || site_settings().admin_password_sign_in_enabled {
+                        div { class: "input-group",
+                            label { class: "label", "Email" }
+                            input {
+                                class: "input",
+                                value: "{admin_email}",
+                                oninput: move |event| admin_email.set(event.value()),
+                                onkeydown: move |event| {
+                                    if is_enter_key(&event) {
+                                        event.prevent_default();
+                                        if setup_required() == Some(true) {
+                                            setup.call(());
+                                        } else {
+                                            login.call(());
+                                        }
                                     }
-                                }
-                            },
-                            placeholder: "admin@example.com"
+                                },
+                                placeholder: "admin@example.com"
+                            }
                         }
-                    }
-                    div { class: "input-group",
-                        label { class: "label", "Password" }
-                        input {
-                            class: "input",
-                            r#type: "password",
-                            value: "{admin_password}",
-                            oninput: move |event| admin_password.set(event.value()),
-                            onkeydown: move |event| {
-                                if is_enter_key(&event) {
-                                    event.prevent_default();
-                                    if setup_required() == Some(true) {
-                                        setup.call(());
-                                    } else {
-                                        login.call(());
+                        div { class: "input-group",
+                            label { class: "label", "Password" }
+                            input {
+                                class: "input",
+                                r#type: "password",
+                                value: "{admin_password}",
+                                oninput: move |event| admin_password.set(event.value()),
+                                onkeydown: move |event| {
+                                    if is_enter_key(&event) {
+                                        event.prevent_default();
+                                        if setup_required() == Some(true) {
+                                            setup.call(());
+                                        } else {
+                                            login.call(());
+                                        }
                                     }
-                                }
-                            },
-                            placeholder: "Password"
+                                },
+                                placeholder: "Password"
+                            }
                         }
                     }
                     div { class: "action-stack",
@@ -195,13 +219,26 @@ fn AdminAuthPage(
                                 variant: "primary".to_string(),
                                 onclick: move |_| setup.call(()),
                             }
-                        } else {
+                        } else if site_settings().admin_password_sign_in_enabled {
                             UiButton {
                                 label: "Enter dashboard".to_string(),
                                 variant: "primary".to_string(),
                                 onclick: move |_| login.call(()),
                             }
                         }
+                        if setup_required() == Some(false) && site_settings().admin_microsoft_sign_in_enabled {
+                            UiButton {
+                                label: "Sign in with Microsoft".to_string(),
+                                variant: "secondary".to_string(),
+                                onclick: sign_in_with_microsoft,
+                            }
+                        }
+                    }
+                    if setup_required() == Some(false)
+                        && !site_settings().admin_password_sign_in_enabled
+                        && !site_settings().admin_microsoft_sign_in_enabled
+                    {
+                        p { class: "hint", "Admin sign-in is currently unavailable." }
                     }
                 }
                 if !feedback().is_empty() {
@@ -269,6 +306,10 @@ fn AdminDashboardPage(
     let account_draft = use_signal(AccountDraft::default);
     let group_draft = use_signal(GroupDraft::default);
     let site_title = use_signal(String::new);
+    let admin_password_sign_in_enabled = use_signal(|| true);
+    let admin_microsoft_sign_in_enabled = use_signal(|| true);
+    let user_password_sign_in_enabled = use_signal(|| true);
+    let user_microsoft_sign_in_enabled = use_signal(|| true);
     let share_account_ids = use_signal(Vec::<Uuid>::new);
     let share_group_ids = use_signal(Vec::<Uuid>::new);
     let connection_handle = use_hook(|| Rc::new(RefCell::new(None::<ReconnectingSocket>)));
@@ -292,6 +333,10 @@ fn AdminDashboardPage(
         let mut connection_status = connection_status;
         let mut active_section = active_section;
         let mut site_title = site_title;
+        let mut admin_password_sign_in_enabled = admin_password_sign_in_enabled;
+        let mut admin_microsoft_sign_in_enabled = admin_microsoft_sign_in_enabled;
+        let mut user_password_sign_in_enabled = user_password_sign_in_enabled;
+        let mut user_microsoft_sign_in_enabled = user_microsoft_sign_in_enabled;
         let mut share_account_ids = share_account_ids;
         let mut share_group_ids = share_group_ids;
         let mut socket = socket;
@@ -304,6 +349,14 @@ fn AdminDashboardPage(
                     if site_title().is_empty() {
                         site_title.set(state.site_settings.site_title.clone());
                     }
+                    admin_password_sign_in_enabled
+                        .set(state.site_settings.admin_password_sign_in_enabled);
+                    admin_microsoft_sign_in_enabled
+                        .set(state.site_settings.admin_microsoft_sign_in_enabled);
+                    user_password_sign_in_enabled
+                        .set(state.site_settings.user_password_sign_in_enabled);
+                    user_microsoft_sign_in_enabled
+                        .set(state.site_settings.user_microsoft_sign_in_enabled);
                     if let Some(queue) = state.selected_queue.as_ref() {
                         share_account_ids.set(queue.shared_account_ids.clone());
                         share_group_ids.set(queue.shared_group_ids.clone());
@@ -625,6 +678,10 @@ fn AdminDashboardPage(
 
     let update_site_settings = {
         let site_title = site_title;
+        let admin_password_sign_in_enabled = admin_password_sign_in_enabled;
+        let admin_microsoft_sign_in_enabled = admin_microsoft_sign_in_enabled;
+        let user_password_sign_in_enabled = user_password_sign_in_enabled;
+        let user_microsoft_sign_in_enabled = user_microsoft_sign_in_enabled;
         let socket = socket;
         let mut feedback = feedback;
         let admin_token = admin_session.token.clone();
@@ -636,6 +693,10 @@ fn AdminDashboardPage(
                     &ClientMessage::UpdateSiteSettings {
                         admin_token: admin_token.clone(),
                         site_title: site_title(),
+                        admin_password_sign_in_enabled: admin_password_sign_in_enabled(),
+                        admin_microsoft_sign_in_enabled: admin_microsoft_sign_in_enabled(),
+                        user_password_sign_in_enabled: user_password_sign_in_enabled(),
+                        user_microsoft_sign_in_enabled: user_microsoft_sign_in_enabled(),
                     },
                 );
             } else {
@@ -752,6 +813,21 @@ fn AdminDashboardPage(
             }
         }
     };
+    let reopen_entry = {
+        let socket = socket;
+        let admin_token = admin_session.token.clone();
+        move |entry_id: Uuid| {
+            if let Some(ws) = socket() {
+                let _ = send_ws(
+                    &ws,
+                    &ClientMessage::ReopenEntry {
+                        admin_token: admin_token.clone(),
+                        entry_id,
+                    },
+                );
+            }
+        }
+    };
 
     let sign_out = {
         let route = route;
@@ -765,6 +841,7 @@ fn AdminDashboardPage(
     let resolve_entry = EventHandler::new(resolve_entry);
     let unclaim_entry = EventHandler::new(unclaim_entry);
     let deny_entry = EventHandler::new(deny_entry);
+    let reopen_entry = EventHandler::new(reopen_entry);
     let create_queue = EventHandler::new(create_queue);
     let create_account = EventHandler::new(create_account);
     let create_group = EventHandler::new(create_group);
@@ -796,6 +873,18 @@ fn AdminDashboardPage(
 
     rsx! {
         document::Title { "{document_title}" }
+        div { class: "admin-top-control",
+            button {
+                class: "button button-secondary top-control-button",
+                onclick: move |_| navigate(route, Route::Home),
+                "Home"
+            }
+            button {
+                class: "button button-secondary top-control-button",
+                onclick: sign_out,
+                "Sign out"
+            }
+        }
         div { class: "admin-shell",
             ConnectionBanner { status: connection_status() }
             header { class: "admin-header",
@@ -809,14 +898,6 @@ fn AdminDashboardPage(
                             " • super admin"
                         }
                     }
-                }
-                div { class: "button-row",
-                    button {
-                        class: "button button-secondary",
-                        onclick: move |_| navigate(route, Route::Home),
-                        "Home"
-                    }
-                    button { class: "button button-secondary", onclick: sign_out, "Sign out" }
                 }
             }
 
@@ -882,6 +963,10 @@ fn AdminDashboardPage(
                             share_account_ids,
                             share_group_ids,
                             site_title,
+                            admin_password_sign_in_enabled,
+                            admin_microsoft_sign_in_enabled,
+                            user_password_sign_in_enabled,
+                            user_microsoft_sign_in_enabled,
                             create_queue,
                             update_queue_settings,
                             create_account,
@@ -897,6 +982,7 @@ fn AdminDashboardPage(
                             unclaim_entry,
                             resolve_entry,
                             deny_entry,
+                            reopen_entry,
                         )}
 
                         if !feedback().is_empty() {
@@ -936,6 +1022,10 @@ fn render_admin_page(
     share_account_ids: Signal<Vec<Uuid>>,
     share_group_ids: Signal<Vec<Uuid>>,
     site_title: Signal<String>,
+    admin_password_sign_in_enabled: Signal<bool>,
+    admin_microsoft_sign_in_enabled: Signal<bool>,
+    user_password_sign_in_enabled: Signal<bool>,
+    user_microsoft_sign_in_enabled: Signal<bool>,
     create_queue: EventHandler<()>,
     update_queue_settings: EventHandler<(
         Uuid,
@@ -958,6 +1048,7 @@ fn render_admin_page(
     unclaim_entry: EventHandler<Uuid>,
     resolve_entry: EventHandler<Uuid>,
     deny_entry: EventHandler<Uuid>,
+    reopen_entry: EventHandler<Uuid>,
 ) -> Element {
     match (
         selected_queue_uuid,
@@ -984,6 +1075,10 @@ fn render_admin_page(
             AdminSection::SiteManagement if state.admin.is_super_admin => rsx! {
                 SiteManagementPage {
                     site_title,
+                    admin_password_sign_in_enabled,
+                    admin_microsoft_sign_in_enabled,
+                    user_password_sign_in_enabled,
+                    user_microsoft_sign_in_enabled,
                     update_site_settings,
                 }
             },
@@ -1030,6 +1125,7 @@ fn render_admin_page(
                 unclaim_entry,
                 resolve_entry,
                 deny_entry,
+                reopen_entry,
             }
         },
         (Some(queue_id), Some(_), Some(queue), Some(entry)) => rsx! {
@@ -1042,6 +1138,7 @@ fn render_admin_page(
                 unclaim_entry,
                 resolve_entry,
                 deny_entry,
+                reopen_entry,
             }
         },
         (Some(_), Some(_), Some(queue), None) => rsx! {
@@ -1461,9 +1558,17 @@ fn FieldEditorRow(
 #[component]
 fn SiteManagementPage(
     site_title: Signal<String>,
+    admin_password_sign_in_enabled: Signal<bool>,
+    admin_microsoft_sign_in_enabled: Signal<bool>,
+    user_password_sign_in_enabled: Signal<bool>,
+    user_microsoft_sign_in_enabled: Signal<bool>,
     update_site_settings: EventHandler<()>,
 ) -> Element {
     let mut site_title = site_title;
+    let mut admin_password_sign_in_enabled = admin_password_sign_in_enabled;
+    let mut admin_microsoft_sign_in_enabled = admin_microsoft_sign_in_enabled;
+    let mut user_password_sign_in_enabled = user_password_sign_in_enabled;
+    let mut user_microsoft_sign_in_enabled = user_microsoft_sign_in_enabled;
 
     rsx! {
         section { class: "table-page-section split-view-section",
@@ -1495,6 +1600,34 @@ fn SiteManagementPage(
                     label: "Save".to_string(),
                     variant: "primary".to_string(),
                     onclick: move |_| update_site_settings.call(()),
+                }
+            }
+            div { class: "settings-grid",
+                div { class: "settings-group",
+                    h3 { "Admin sign-in" }
+                    UiSwitch {
+                        label: "Password sign-in".to_string(),
+                        checked: admin_password_sign_in_enabled(),
+                        onchange: move |checked| admin_password_sign_in_enabled.set(checked),
+                    }
+                    UiSwitch {
+                        label: "Microsoft SSO".to_string(),
+                        checked: admin_microsoft_sign_in_enabled(),
+                        onchange: move |checked| admin_microsoft_sign_in_enabled.set(checked),
+                    }
+                }
+                div { class: "settings-group",
+                    h3 { "User sign-in" }
+                    UiSwitch {
+                        label: "Password sign-in".to_string(),
+                        checked: user_password_sign_in_enabled(),
+                        onchange: move |checked| user_password_sign_in_enabled.set(checked),
+                    }
+                    UiSwitch {
+                        label: "Microsoft SSO".to_string(),
+                        checked: user_microsoft_sign_in_enabled(),
+                        onchange: move |checked| user_microsoft_sign_in_enabled.set(checked),
+                    }
                 }
             }
         }
@@ -1682,7 +1815,7 @@ fn AccountsPage(
                             }
                         }
                         div { class: "input-group",
-                            label { class: "label", "Name" }
+                            label { class: "label", "Full Name" }
                             input {
                                 class: "input",
                                 value: "{account_draft().name}",
@@ -1961,14 +2094,10 @@ fn QueueIndexPage(route: Signal<Route>, state: AdminStateView) -> Element {
                                     td { "{queue.summary.name}" }
                                     td { "{queue.owner_name}" }
                                     td {
-                                        if queue.summary.is_public {
-                                            span { class: "table-inline-note", "Public" }
-                                            " "
-                                        }
                                         if queue.summary.allow_guests {
                                             "Guests allowed"
                                         } else {
-                                            "Accounts only"
+                                            "Sign in required"
                                         }
                                         if let Some(opens_at) = queue.summary.opens_at.as_deref() {
                                             br {}
@@ -2122,6 +2251,7 @@ fn QueueRequestsPage(
     unclaim_entry: EventHandler<Uuid>,
     resolve_entry: EventHandler<Uuid>,
     deny_entry: EventHandler<Uuid>,
+    reopen_entry: EventHandler<Uuid>,
 ) -> Element {
     let mut share_account_ids = share_account_ids;
     let mut share_group_ids = share_group_ids;
@@ -2139,7 +2269,7 @@ fn QueueRequestsPage(
     let mut settings_fields = use_signal(|| editable_fields_from_queue(&queue.fields));
     let mut schedule_modal_open = use_signal(|| false);
     let queue_link = frontend_url(&Route::Queue {
-        queue_id: queue.summary.id.to_string(),
+        queue_id: queue.summary.code.clone(),
     });
     let queue_name = queue.summary.name.clone();
     let list_fields = request_list_fields(&queue.fields);
@@ -2448,6 +2578,13 @@ fn QueueRequestsPage(
                                                 "Deny"
                                             }
                                         }
+                                        if matches!(entry.status, QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
+                                            button {
+                                                class: "action-button",
+                                                onclick: move |_| reopen_entry.call(entry.id),
+                                                "Reopen"
+                                            }
+                                        }
                                         button {
                                             class: "action-button",
                                             onclick: move |_| navigate(route, Route::Admin {
@@ -2482,6 +2619,7 @@ fn RequestDetailPage(
     unclaim_entry: EventHandler<Uuid>,
     resolve_entry: EventHandler<Uuid>,
     deny_entry: EventHandler<Uuid>,
+    reopen_entry: EventHandler<Uuid>,
 ) -> Element {
     let queue_name = queue.summary.name.clone();
     let handled_by = entry
@@ -2576,8 +2714,15 @@ fn RequestDetailPage(
                         "Deny"
                     }
                 }
+                if matches!(entry.status, QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
+                    button {
+                        class: "button button-secondary",
+                        onclick: move |_| reopen_entry.call(entry.id),
+                        "Reopen"
+                    }
+                }
             }
-            if matches!(entry.status, QueueEntryStatus::Left | QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
+            if matches!(entry.status, QueueEntryStatus::Left) {
                 p { class: "hint inspector-note", "No further actions are available for this request." }
             }
         }

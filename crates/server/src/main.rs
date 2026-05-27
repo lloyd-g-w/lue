@@ -1,3 +1,4 @@
+mod auth;
 mod model;
 mod password;
 mod persistence;
@@ -5,9 +6,11 @@ mod store;
 mod utils;
 mod ws;
 
+use auth::{microsoft_auth_config, microsoft_callback_handler, microsoft_start_handler};
 use axum::routing::get;
 use axum::Router;
 use model::{AppState, Store};
+use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,6 +21,8 @@ use ws::ws_handler;
 
 #[tokio::main]
 async fn main() {
+    let _ = dotenvy::dotenv();
+
     let data_path = env::var("DATA_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("data/store.json"));
@@ -28,11 +33,15 @@ async fn main() {
         store: Arc::new(RwLock::new(store)),
         updates,
         data_path,
+        microsoft_auth: microsoft_auth_config(),
+        microsoft_auth_requests: Arc::new(RwLock::new(HashMap::new())),
     };
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(ws_handler))
+        .route("/auth/microsoft/start", get(microsoft_start_handler))
+        .route("/auth/microsoft/callback", get(microsoft_callback_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 

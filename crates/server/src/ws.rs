@@ -112,6 +112,7 @@ async fn process_command(
                 sender,
                 &ServerMessage::SetupState {
                     needs_setup: store.needs_initial_setup(),
+                    site_settings: store.site_settings_view(),
                 },
             )
             .await
@@ -129,6 +130,16 @@ async fn process_command(
             )
             .await
             .map_err(|error| error.to_string())?;
+            Ok(None)
+        }
+        ClientMessage::ResolveQueueCode { code } => {
+            let store = state.store.read().await;
+            let queue_id = store
+                .queue_id_for_code(&code)
+                .ok_or_else(|| "queue code not found".to_string())?;
+            send_message(sender, &ServerMessage::QueueCodeResolved { queue_id })
+                .await
+                .map_err(|error| error.to_string())?;
             Ok(None)
         }
         ClientMessage::SetupSuperAdmin {
@@ -429,9 +440,20 @@ async fn process_command(
         ClientMessage::UpdateSiteSettings {
             admin_token,
             site_title,
+            admin_password_sign_in_enabled,
+            admin_microsoft_sign_in_enabled,
+            user_password_sign_in_enabled,
+            user_microsoft_sign_in_enabled,
         } => {
             let mut store = state.store.write().await;
-            store.update_site_settings(&admin_token, site_title)?;
+            store.update_site_settings(
+                &admin_token,
+                site_title,
+                admin_password_sign_in_enabled,
+                admin_microsoft_sign_in_enabled,
+                user_password_sign_in_enabled,
+                user_microsoft_sign_in_enabled,
+            )?;
             store
                 .save_to_disk(&state.data_path)
                 .map_err(|error| format!("failed to save store: {error}"))?;
@@ -529,6 +551,18 @@ async fn process_command(
             let mut store = state.store.write().await;
             let queue_id =
                 store.update_entry_status(&admin_token, entry_id, QueueEntryStatus::Denied)?;
+            store
+                .save_to_disk(&state.data_path)
+                .map_err(|error| format!("failed to save store: {error}"))?;
+            Ok(Some(queue_id))
+        }
+        ClientMessage::ReopenEntry {
+            admin_token,
+            entry_id,
+        } => {
+            let mut store = state.store.write().await;
+            let queue_id =
+                store.update_entry_status(&admin_token, entry_id, QueueEntryStatus::Pending)?;
             store
                 .save_to_disk(&state.data_path)
                 .map_err(|error| format!("failed to save store: {error}"))?;

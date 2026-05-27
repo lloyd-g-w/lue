@@ -21,7 +21,8 @@ use crate::view_helpers::{
     is_enter_key, is_requester_name_key, kebab_case, status_class_suffix, status_label,
 };
 use crate::ws::{
-    connect_reconnecting_socket, login_user_socket, send_ws, ReconnectingSocket, SocketStatus,
+    connect_reconnecting_socket, login_user_socket, resolve_queue_code_socket, send_ws,
+    ReconnectingSocket, SocketStatus,
 };
 
 #[component]
@@ -29,6 +30,10 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
     let queue_state = use_signal(|| None::<UserQueueView>);
     let site_settings = use_signal(|| SiteSettingsView {
         site_title: "Lue".to_string(),
+        admin_password_sign_in_enabled: true,
+        admin_microsoft_sign_in_enabled: true,
+        user_password_sign_in_enabled: true,
+        user_microsoft_sign_in_enabled: true,
     });
     let your_entry = use_signal(|| None::<UserEntryView>);
     let user_session = use_signal(load_user_session);
@@ -39,6 +44,7 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
     let mut auth_password = use_signal(String::new);
     let form_values = use_signal(BTreeMap::<String, String>::new);
     let socket = use_signal(|| None::<WebSocket>);
+    let resolved_queue_id = use_signal(|| Uuid::parse_str(&queue_id).ok());
     let connection_handle = use_hook(|| Rc::new(RefCell::new(None::<ReconnectingSocket>)));
     {
         let connection_handle = connection_handle.clone();
@@ -49,16 +55,34 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
         });
     }
 
-    let parsed_queue_id = Uuid::parse_str(&queue_id).ok();
-    if parsed_queue_id.is_none() {
+    {
+        let queue_code = queue_id.clone();
+        let mut resolved_queue_id = resolved_queue_id;
+        let mut feedback = feedback;
+        use_effect(move || {
+            if resolved_queue_id().is_some() {
+                return;
+            }
+            resolve_queue_code_socket(
+                queue_code.clone(),
+                move |queue_id| {
+                    resolved_queue_id.set(Some(queue_id));
+                    feedback.set(String::new());
+                },
+                feedback,
+            );
+        });
+    }
+
+    let Some(active_queue_id) = resolved_queue_id() else {
         return rsx! {
-            section { class: "empty-stage",
-                h1 { "Invalid queue link" }
-                p { "The queue id in the URL is not valid." }
+            DelayedLoading {
+                title: "Finding queue...".to_string(),
+                detail: Some("Checking the queue code.".to_string()),
+                feedback: feedback(),
             }
         };
-    }
-    let parsed_queue_id = parsed_queue_id.expect("validated queue id");
+    };
 
     use_effect(move || {
         let mut queue_state = queue_state;
@@ -68,7 +92,7 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
         let mut connection_status = connection_status;
         let mut socket = socket;
         let mut form_values = form_values;
-        let queue_id = parsed_queue_id;
+        let queue_id = active_queue_id;
         let connection_handle = connection_handle.clone();
 
         let existing_token = load_entry_token(queue_id);
@@ -175,8 +199,8 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                         let _ = send_ws(
                             &ws,
                             &ClientMessage::SubscribeQueue {
-                                queue_id: parsed_queue_id,
-                                entry_token: load_entry_token(parsed_queue_id),
+                                queue_id: active_queue_id,
+                                entry_token: load_entry_token(active_queue_id),
                                 user_token: Some(session.token),
                             },
                         );
@@ -192,6 +216,19 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
         move |_| {
             clear_user_session();
             user_session.set(None);
+        }
+    };
+    let sign_in_with_microsoft = move |_| {
+        if let Some(window) = web_sys::window() {
+            let return_to = window
+                .location()
+                .pathname()
+                .unwrap_or_else(|_| "/".to_string());
+            let _ = window
+                .location()
+                .set_href(&crate::ws::backend_http_url(&format!(
+                    "/auth/microsoft/start?kind=user&return_to={return_to}"
+                )));
         }
     };
 
@@ -276,6 +313,12 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                                         variant: "danger".to_string(),
                                         onclick: leave_queue,
                                     }
+                                } else if matches!(entry.status, QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
+                                    UiButton {
+                                        label: "Join again".to_string(),
+                                        variant: "primary".to_string(),
+                                        onclick: move |_| join_queue.call(()),
+                                    }
                                 } else {
                                     p { class: "hint", "This request is no longer active." }
                                 }
@@ -305,44 +348,56 @@ pub fn QueuePage(route: Signal<Route>, queue_id: String) -> Element {
                                 }
                             }
                         } else {
-                            div { class: "auth-inline-grid",
-                                div { class: "input-group",
-                                    label { class: "label", "Email" }
-                                    input {
-                                        class: "input",
-                                        value: "{auth_email}",
-                                        oninput: move |event| auth_email.set(event.value()),
-                                        onkeydown: move |event| {
-                                            if is_enter_key(&event) {
-                                                event.prevent_default();
-                                                login_user.call(());
-                                            }
-                                        },
-                                        placeholder: "user@example.com"
+                            if site_settings().user_password_sign_in_enabled {
+                                div { class: "auth-inline-grid",
+                                    div { class: "input-group",
+                                        label { class: "label", "Email" }
+                                        input {
+                                            class: "input",
+                                            value: "{auth_email}",
+                                            oninput: move |event| auth_email.set(event.value()),
+                                            onkeydown: move |event| {
+                                                if is_enter_key(&event) {
+                                                    event.prevent_default();
+                                                    login_user.call(());
+                                                }
+                                            },
+                                            placeholder: "user@example.com"
+                                        }
+                                    }
+                                    div { class: "input-group",
+                                        label { class: "label", "Password" }
+                                        input {
+                                            class: "input",
+                                            r#type: "password",
+                                            value: "{auth_password}",
+                                            oninput: move |event| auth_password.set(event.value()),
+                                            onkeydown: move |event| {
+                                                if is_enter_key(&event) {
+                                                    event.prevent_default();
+                                                    login_user.call(());
+                                                }
+                                            },
+                                            placeholder: "Password"
+                                        }
+                                    }
+                                    UiButton {
+                                        label: "Sign in".to_string(),
+                                        variant: "secondary".to_string(),
+                                        class: "auth-submit".to_string(),
+                                        onclick: move |_| login_user.call(()),
                                     }
                                 }
-                                div { class: "input-group",
-                                    label { class: "label", "Password" }
-                                    input {
-                                        class: "input",
-                                        r#type: "password",
-                                        value: "{auth_password}",
-                                        oninput: move |event| auth_password.set(event.value()),
-                                        onkeydown: move |event| {
-                                            if is_enter_key(&event) {
-                                                event.prevent_default();
-                                                login_user.call(());
-                                            }
-                                        },
-                                        placeholder: "Password"
-                                    }
-                                }
+                            }
+                            if site_settings().user_microsoft_sign_in_enabled {
                                 UiButton {
-                                    label: "Sign in".to_string(),
+                                    label: "Sign in with Microsoft".to_string(),
                                     variant: "secondary".to_string(),
-                                    class: "auth-submit".to_string(),
-                                    onclick: move |_| login_user.call(()),
+                                    onclick: sign_in_with_microsoft,
                                 }
+                            }
+                            if !site_settings().user_password_sign_in_enabled && !site_settings().user_microsoft_sign_in_enabled {
+                                p { class: "hint", "User sign-in is currently unavailable." }
                             }
                             if !queue.allow_guests {
                                 p { class: "hint", "An account is required for this queue." }
@@ -476,7 +531,12 @@ fn connection_class(status: SocketStatus) -> &'static str {
 
 fn should_show_join_form(entry: Option<UserEntryView>) -> bool {
     entry
-        .map(|entry| matches!(entry.status, QueueEntryStatus::Left))
+        .map(|entry| {
+            matches!(
+                entry.status,
+                QueueEntryStatus::Left | QueueEntryStatus::Resolved | QueueEntryStatus::Denied
+            )
+        })
         .unwrap_or(true)
 }
 

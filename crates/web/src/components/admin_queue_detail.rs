@@ -13,9 +13,10 @@ pub fn AdminQueueDetail(
     unclaim_entry: EventHandler<uuid::Uuid>,
     resolve_entry: EventHandler<uuid::Uuid>,
     deny_entry: EventHandler<uuid::Uuid>,
+    reopen_entry: EventHandler<uuid::Uuid>,
 ) -> Element {
     let queue_link = frontend_url(&Route::Queue {
-        queue_id: queue.summary.id.to_string(),
+        queue_id: queue.summary.code.clone(),
     });
 
     rsx! {
@@ -140,8 +141,15 @@ pub fn AdminQueueDetail(
                                         "Deny"
                                     }
                                 }
+                                if matches!(entry.status, QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
+                                    button {
+                                        class: "button button-secondary",
+                                        onclick: move |_| reopen_entry.call(entry.id),
+                                        "Reopen"
+                                    }
+                                }
                             }
-                            if matches!(entry.status, QueueEntryStatus::Left | QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
+                            if matches!(entry.status, QueueEntryStatus::Left) {
                                 p { class: "hint inspector-note", "No further actions are available for this request." }
                             }
                         } else {

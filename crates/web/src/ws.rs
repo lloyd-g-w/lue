@@ -37,13 +37,16 @@ impl ReconnectingSocket {
 }
 
 pub fn check_setup_socket(
-    mut on_setup_state: impl FnMut(bool) + 'static,
+    mut on_setup_state: impl FnMut(bool, shared::SiteSettingsView) + 'static,
     mut feedback: Signal<String>,
 ) {
     one_shot_socket(
         ClientMessage::CheckSetup,
         move |message| match message {
-            ServerMessage::SetupState { needs_setup } => on_setup_state(needs_setup),
+            ServerMessage::SetupState {
+                needs_setup,
+                site_settings,
+            } => on_setup_state(needs_setup, site_settings),
             ServerMessage::Error { message } => feedback.set(message),
             _ => {}
         },
@@ -62,6 +65,27 @@ pub fn list_public_queues_socket(
                 queues,
                 site_settings,
             } => on_public_queues(queues, site_settings),
+            ServerMessage::Error { message } => feedback.set(message),
+            _ => {}
+        },
+        feedback,
+    );
+}
+
+pub fn resolve_queue_code_socket(
+    code: String,
+    mut on_resolved: impl FnMut(uuid::Uuid) + 'static,
+    mut feedback: Signal<String>,
+) {
+    if code.trim().is_empty() {
+        feedback.set("Enter a queue code".to_string());
+        return;
+    }
+
+    one_shot_socket(
+        ClientMessage::ResolveQueueCode { code },
+        move |message| match message {
+            ServerMessage::QueueCodeResolved { queue_id } => on_resolved(queue_id),
             ServerMessage::Error { message } => feedback.set(message),
             _ => {}
         },
@@ -325,4 +349,27 @@ fn backend_ws_url() -> String {
     };
 
     format!("{protocol}://{host}/ws")
+}
+
+pub fn backend_http_url(path: &str) -> String {
+    let window = window().expect("browser window");
+    let location = window.location();
+    let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
+    let hostname = location
+        .hostname()
+        .ok()
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = location.port().ok().unwrap_or_default();
+    let host = if matches!(hostname.as_str(), "127.0.0.1" | "localhost") && port == "8080" {
+        format!("{hostname}:{WS_BACKEND_PORT}")
+    } else {
+        location
+            .host()
+            .ok()
+            .filter(|host| !host.is_empty())
+            .unwrap_or_else(|| hostname.clone())
+    };
+
+    format!("{protocol}//{host}{path}")
 }

@@ -25,6 +25,14 @@ Use `DATA_PATH=/tmp/lue-store.json cargo run -p server` for isolated persistence
 In containers, the backend uses `SERVER_ADDR=0.0.0.0:3000` and stores data at `/data/store.json`
 on the `lue-data` Docker volume.
 
+Microsoft SSO is enabled by setting `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`,
+`MICROSOFT_TENANT_ID`, `SERVER_PUBLIC_BASE_URL`, and `FRONTEND_BASE_URL`. The redirect URI is
+`${SERVER_PUBLIC_BASE_URL}/auth/microsoft/callback`. SSO requires an existing local account with
+the same email address.
+
+Admin and user password/Microsoft sign-in can be enabled or disabled separately from Site
+management. Keep both admin sign-in methods enabled unless there is a verified recovery path.
+
 ## Coding Style & Naming Conventions
 
 Use Rust 2021 edition and standard rustfmt output. Keep shared protocol types in `shared`, backend-only behavior in `server`, and UI/client behavior in `web`.

@@ -6,6 +6,8 @@ services:
     environment:
       SERVER_ADDR: 0.0.0.0:3000
       DATA_PATH: /data/store.json
+      SERVER_PUBLIC_BASE_URL: http://127.0.0.1:8081
+      FRONTEND_BASE_URL: http://127.0.0.1:8081
     volumes:
       - lue-data:/data
     restart: unless-stopped

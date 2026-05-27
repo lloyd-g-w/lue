@@ -120,11 +120,131 @@ a {
   padding: clamp(1rem, 2vw, 1.5rem) clamp(1rem, 2vw, 1.5rem) 4rem;
 }
 
+.toast-stack {
+  position: fixed;
+  top: clamp(4rem, 7vw, 5rem);
+  right: clamp(0.75rem, 2vw, 1.25rem);
+  z-index: 40;
+  display: grid;
+  gap: 0.75rem;
+  width: min(26rem, calc(100vw - 2rem));
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 0.9rem;
+  padding: 0.9rem 0.9rem 0.9rem 1rem;
+  border: 1px solid var(--feedback-border);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-strong);
+}
+
+.toast p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.93rem;
+  line-height: 1.45;
+}
+
+.toast-dismiss {
+  display: grid;
+  place-items: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.toast-dismiss:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.top-auth-control {
+  position: fixed;
+  top: clamp(0.75rem, 2vw, 1.25rem);
+  right: calc(clamp(0.75rem, 2vw, 1.25rem) + 3rem);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-top-control {
+  position: fixed;
+  top: clamp(0.75rem, 2vw, 1.25rem);
+  right: calc(clamp(0.75rem, 2vw, 1.25rem) + 3rem);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.top-auth-label {
+  max-width: min(16rem, 44vw);
+  overflow: hidden;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-auth-control .ui-button {
+  display: grid;
+  place-items: center;
+  width: 4.9rem;
+  height: 2.45rem;
+  min-height: 2.45rem;
+  padding: 0;
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 0.72rem;
+  line-height: 1;
+  text-align: center;
+}
+
+.top-control-button {
+  width: auto;
+  height: 2.45rem;
+  min-height: 2.45rem;
+  padding: 0 14px;
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.top-control-button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
+}
+
+.top-auth-control .ui-button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
+}
+
 .theme-toggle {
   position: fixed;
   top: clamp(0.75rem, 2vw, 1.25rem);
   right: clamp(0.75rem, 2vw, 1.25rem);
-  z-index: 26;
+  z-index: 10;
   display: grid;
   place-items: center;
   width: 2.45rem;
@@ -152,6 +272,75 @@ a {
   color: currentColor;
 }
 
+.modal-login-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.loading-stage {
+  display: grid;
+  place-items: center;
+  min-height: min(30rem, calc(100vh - 10rem));
+}
+
+.loading-card {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  width: min(100%, 28rem);
+  padding: clamp(1.5rem, 5vw, 2.5rem);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.loading-card h1 {
+  max-width: none;
+  margin: 0 0 8px;
+  font-size: clamp(1.6rem, 4vw, 2.25rem);
+}
+
+.loading-mark {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--accent-soft);
+}
+
+.loading-mark span {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: loading-pulse 900ms ease-in-out infinite;
+}
+
+.loading-mark span:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.loading-mark span:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+@keyframes loading-pulse {
+  0%, 80%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+
 .landing-layout,
 .home-layout,
 .admin-grid,
@@ -162,9 +351,9 @@ a {
 }
 
 .home-layout {
-  grid-template-columns: minmax(0, 62fr) minmax(18rem, 38fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  width: min(calc(100vw - clamp(2rem, 4vw, 3rem)), 74rem);
+  width: min(calc(100vw - clamp(2rem, 4vw, 3rem)), 46rem);
   margin: clamp(1rem, 5vh, 4rem) auto 0;
 }
 
@@ -249,16 +438,18 @@ a {
 .home-main {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .home-title-row {
   display: flex;
   gap: 16px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   flex-wrap: wrap;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--line);
+  text-align: left;
 }
 
 .home-title-row h1 {
@@ -715,6 +906,25 @@ select.input {
 .icon-button {
   background: var(--surface-muted);
   color: var(--ink);
+}
+
+.admin-top-control .top-control-button {
+  width: auto;
+  height: 2.45rem;
+  min-height: 2.45rem;
+  padding: 0 14px;
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.admin-top-control .top-control-button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
 }
 
 .button.success {
@@ -1318,6 +1528,28 @@ select.input {
   max-width: 48rem;
 }
 
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 48rem;
+}
+
+.settings-group {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.settings-group h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
 .create-queue-form {
   max-width: none;
   align-self: stretch;
@@ -1664,6 +1896,7 @@ input[type="checkbox"] {
   .admin-grid,
   .account-management-grid,
   .site-branding-row,
+  .settings-grid,
   .share-grid,
   .workspace-columns,
   .queue-page-layout {
@@ -1677,10 +1910,7 @@ input[type="checkbox"] {
 
   .home-layout {
     width: 100%;
-  }
-
-  .home-layout > .login-panel {
-    transform: none;
+    margin-top: 0.75rem;
   }
 
   .landing-copy {

@@ -8,6 +8,10 @@ use crate::{AccountRole, AccountView, QueueEntryStatus, QueueField, QueueSummary
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SiteSettingsView {
     pub site_title: String,
+    pub admin_password_sign_in_enabled: bool,
+    pub admin_microsoft_sign_in_enabled: bool,
+    pub user_password_sign_in_enabled: bool,
+    pub user_microsoft_sign_in_enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

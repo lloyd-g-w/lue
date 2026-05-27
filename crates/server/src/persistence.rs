@@ -81,6 +81,7 @@ impl Store {
         };
         store.prune_invalid_sessions();
         store.hash_legacy_plaintext_passwords()?;
+        store.ensure_queue_codes();
         store.rebuild_indexes();
         Ok(store)
     }
@@ -113,11 +114,39 @@ impl Store {
             .map(|(id, account)| (account.email.clone(), *id))
             .collect();
 
+        self.queue_code_index.clear();
+        for (queue_id, queue) in &self.queues {
+            self.queue_code_index
+                .insert(Queue::normalize_code(&queue.code), *queue_id);
+        }
+
         self.entry_index.clear();
         for (queue_id, queue) in &self.queues {
             for entry in &queue.entries {
                 self.entry_index.insert(entry.id, *queue_id);
             }
+        }
+    }
+
+    fn ensure_queue_codes(&mut self) {
+        let mut existing_codes = std::collections::HashSet::new();
+        for queue in self.archived_queues.values_mut() {
+            let code = Queue::normalize_code(&queue.queue.code);
+            if code.is_empty() || existing_codes.contains(&code) {
+                queue.queue.code = Queue::new_code(&existing_codes);
+            } else {
+                queue.queue.code = code;
+            }
+            existing_codes.insert(queue.queue.code.clone());
+        }
+        for queue in self.queues.values_mut() {
+            let code = Queue::normalize_code(&queue.code);
+            if code.is_empty() || existing_codes.contains(&code) {
+                queue.code = Queue::new_code(&existing_codes);
+            } else {
+                queue.code = code;
+            }
+            existing_codes.insert(queue.code.clone());
         }
     }
 }
@@ -158,6 +187,7 @@ mod tests {
                 queue_id,
                 Queue {
                     id: queue_id,
+                    code: "ABC123".to_string(),
                     name: "Support".to_string(),
                     allow_guests: true,
                     is_public: false,
