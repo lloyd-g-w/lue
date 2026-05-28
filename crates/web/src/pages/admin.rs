@@ -12,6 +12,7 @@ use web_sys::WebSocket;
 
 use crate::components::{
     DelayedLoading, UiButton, UiEmpty, UiHeader, UiModal, UiPanel, UiScheduleOption, UiSwitch,
+    UiTable, UiTh,
 };
 use crate::models::{AccountDraft, AdminSessionRecord, EditableField, GroupDraft};
 use crate::route::{frontend_url, navigate, Route};
@@ -2080,48 +2081,48 @@ fn QueueIndexPage(route: Signal<Route>, state: AdminStateView) -> Element {
                     p { "No queues yet. Open Create queue from the admin navigation." }
                 }
             } else {
-                div { class: "table-shell",
-                    table { class: "data-table",
-                        thead {
-                            tr {
-                                th { "Queue" }
-                                th { "Owner" }
-                                th { "Access" }
-                                th { "Waiting" }
-                                th { "Active" }
-                                th { "Open" }
-                            }
+                UiTable {
+                    id: "admin-open-queues".to_string(),
+                    columns: fixed_columns(&["24", "17", "21", "9", "9", "20"]),
+                    thead {
+                        tr {
+                            UiTh { index: 0, "Queue" }
+                            UiTh { index: 1, "Owner" }
+                            UiTh { index: 2, "Access" }
+                            UiTh { index: 3, "Waiting" }
+                            UiTh { index: 4, "Active" }
+                            UiTh { index: 5, "Open" }
                         }
-                        tbody {
-                            for queue in state.queues.iter().cloned() {
-                                tr {
-                                    td { "{queue.summary.name}" }
-                                    td { "{queue.owner_name}" }
-                                    td {
-                                        if queue.summary.allow_guests {
-                                            "Guests allowed"
-                                        } else {
-                                            "Sign in required"
-                                        }
-                                        if let Some(opens_at) = queue.summary.opens_at.as_deref() {
-                                            br {}
-                                            span { class: "row-meta", "Opens {format_timestamp(opens_at)}" }
-                                        } else if let Some(schedule) = queue.summary.weekly_schedule.as_ref() {
-                                            br {}
-                                            span { class: "row-meta", "{weekly_schedule_label(schedule)}" }
-                                        }
+                    }
+                    tbody {
+                        for queue in state.queues.iter().cloned() {
+                            tr {
+                                td { "{queue.summary.name}" }
+                                td { "{queue.owner_name}" }
+                                td {
+                                    if queue.summary.allow_guests {
+                                        "Guests allowed"
+                                    } else {
+                                        "Sign in required"
                                     }
-                                    td { "{queue.summary.waiting_count}" }
-                                    td { "{queue.summary.active_count}" }
-                                    td {
-                                        button {
-                                            class: "action-button",
-                                            onclick: move |_| navigate(route, Route::Admin {
-                                                queue_id: Some(queue.summary.id.to_string()),
-                                                request_id: None,
-                                            }),
-                                            "View requests"
-                                        }
+                                    if let Some(opens_at) = queue.summary.opens_at.as_deref() {
+                                        br {}
+                                        span { class: "row-meta", "Opens {format_timestamp(opens_at)}" }
+                                    } else if let Some(schedule) = queue.summary.weekly_schedule.as_ref() {
+                                        br {}
+                                        span { class: "row-meta", "{weekly_schedule_label(schedule)}" }
+                                    }
+                                }
+                                td { "{queue.summary.waiting_count}" }
+                                td { "{queue.summary.active_count}" }
+                                td {
+                                    button {
+                                        class: "action-button",
+                                        onclick: move |_| navigate(route, Route::Admin {
+                                            queue_id: Some(queue.summary.id.to_string()),
+                                            request_id: None,
+                                        }),
+                                        "View requests"
                                     }
                                 }
                             }
@@ -2187,37 +2188,38 @@ fn ClosedQueueIndexPage(state: AdminStateView) -> Element {
                                     p { "No one joined this queue before it closed." }
                                 }
                             } else if expanded_queue_ids().contains(&queue.summary.id) {
-                                div { class: "table-shell",
-                                    table { class: "data-table accounts-table",
-                                        thead {
-                                            tr {
-                                                th { "Requester" }
-                                                for field in queue.fields.iter().cloned() {
-                                                    th { "{field.label}" }
-                                                }
-                                                th { "Status" }
-                                                th { "Submitted" }
-                                                th { "Handled by" }
+                                UiTable {
+                                    id: format!("admin-archive-requests-{}", queue.summary.id),
+                                    class: "accounts-table".to_string(),
+                                    columns: archive_request_columns(queue.fields.len()),
+                                    thead {
+                                        tr {
+                                            UiTh { index: 0, "Requester" }
+                                            for (field_index, field) in queue.fields.iter().cloned().enumerate() {
+                                                UiTh { index: field_index + 1, "{field.label}" }
                                             }
+                                            UiTh { index: queue.fields.len() + 1, "Status" }
+                                            UiTh { index: queue.fields.len() + 2, "Submitted" }
+                                            UiTh { index: queue.fields.len() + 3, "Handled by" }
                                         }
-                                        tbody {
-                                            for entry in queue.entries.iter().cloned() {
-                                                tr {
-                                                    td {
-                                                        div { class: "table-primary",
-                                                            "{entry.requester_label}"
-                                                            if entry.is_guest {
-                                                                span { class: "table-inline-note", "Guest" }
-                                                            }
+                                    }
+                                    tbody {
+                                        for entry in queue.entries.iter().cloned() {
+                                            tr {
+                                                td {
+                                                    div { class: "table-primary",
+                                                        "{entry.requester_label}"
+                                                        if entry.is_guest {
+                                                            span { class: "table-inline-note", "Guest" }
                                                         }
                                                     }
-                                                    for field in queue.fields.iter().cloned() {
-                                                        td { "{request_field_value(&field, &entry)}" }
-                                                    }
-                                                    td { span { class: status_class(&entry.status), "{status_label(&entry.status)}" } }
-                                                    td { class: "mono small-text", "{format_timestamp(&entry.submitted_at)}" }
-                                                    td { "{handled_by_label(&entry)}" }
                                                 }
+                                                for field in queue.fields.iter().cloned() {
+                                                    td { "{request_field_value(&field, &entry)}" }
+                                                }
+                                                td { span { class: status_class(&entry.status), "{status_label(&entry.status)}" } }
+                                                td { class: "mono small-text", "{format_timestamp(&entry.submitted_at)}" }
+                                                td { "{handled_by_label(&entry)}" }
                                             }
                                         }
                                     }
@@ -2553,80 +2555,81 @@ fn QueueRequestsPage(
                     }
                 }
             }
-            div { class: "table-shell",
-                table { class: "data-table data-table-clickable",
-                    thead {
-                        tr {
-                            th { "Requester" }
-                            for field in list_fields.iter().cloned() {
-                                th { "{field.label}" }
-                            }
-                            th { "Status" }
-                            th { "Submitted" }
-                            th { "Claimed by" }
-                            th { "Actions" }
+            UiTable {
+                id: format!("admin-live-requests-{queue_id}"),
+                class: "data-table-clickable".to_string(),
+                columns: live_request_columns(list_fields.len()),
+                thead {
+                    tr {
+                        UiTh { index: 0, "Requester" }
+                        for (field_index, field) in list_fields.iter().cloned().enumerate() {
+                            UiTh { index: field_index + 1, "{field.label}" }
                         }
+                        UiTh { index: list_fields.len() + 1, "Status" }
+                        UiTh { index: list_fields.len() + 2, "Submitted" }
+                        UiTh { index: list_fields.len() + 3, "Claimed by" }
+                        UiTh { index: list_fields.len() + 4, "Actions" }
                     }
-                    tbody {
-                        for entry in queue.entries.iter().cloned() {
-                            tr {
-                                td {
-                                    div { class: "table-primary",
-                                        "{entry.requester_label}"
+                }
+                tbody {
+                    for entry in queue.entries.iter().cloned() {
+                        tr {
+                            td {
+                                div { class: "table-primary",
+                                    "{entry.requester_label}"
                                     if entry.is_guest {
                                         span { class: "table-inline-note", "Guest" }
                                     }
                                 }
                             }
-                                for field in list_fields.iter().cloned() {
-                                    td { "{request_field_value(&field, &entry)}" }
-                                }
-                                td { span { class: status_class(&entry.status), "{status_label(&entry.status)}" } }
-                                td { class: "mono small-text", "{format_timestamp(&entry.submitted_at)}" }
-                                td { "{handled_by_label(&entry)}" }
-                                td {
-                                    div { class: "table-actions",
-                                        if matches!(entry.status, QueueEntryStatus::Pending) {
-                                            button {
-                                                class: "action-button action-strong",
-                                                onclick: move |_| claim_entry.call(entry.id),
-                                                "Claim"
-                                            }
+                            for field in list_fields.iter().cloned() {
+                                td { "{request_field_value(&field, &entry)}" }
+                            }
+                            td { span { class: status_class(&entry.status), "{status_label(&entry.status)}" } }
+                            td { class: "mono small-text", "{format_timestamp(&entry.submitted_at)}" }
+                            td { "{handled_by_label(&entry)}" }
+                            td {
+                                div { class: "table-actions",
+                                    if matches!(entry.status, QueueEntryStatus::Pending) {
+                                        button {
+                                            class: "action-button table-action-button table-action-primary action-strong",
+                                            onclick: move |_| claim_entry.call(entry.id),
+                                            "Claim"
                                         }
-                                        if matches!(entry.status, QueueEntryStatus::Claimed) {
-                                            button {
-                                                class: "action-button",
-                                                onclick: move |_| unclaim_entry.call(entry.id),
-                                                "Unclaim"
-                                            }
+                                    }
+                                    if matches!(entry.status, QueueEntryStatus::Claimed) {
+                                        button {
+                                            class: "action-button table-action-button table-action-primary",
+                                            onclick: move |_| unclaim_entry.call(entry.id),
+                                            "Unclaim"
                                         }
-                                        if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
-                                            button {
-                                                class: "action-button action-success",
-                                                onclick: move |_| resolve_entry.call(entry.id),
-                                                "Resolve"
-                                            }
-                                            button {
-                                                class: "action-button action-danger",
-                                                onclick: move |_| deny_entry.call(entry.id),
-                                                "Deny"
-                                            }
-                                        }
-                                        if matches!(entry.status, QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
-                                            button {
-                                                class: "action-button",
-                                                onclick: move |_| reopen_entry.call(entry.id),
-                                                "Reopen"
-                                            }
+                                    }
+                                    if matches!(entry.status, QueueEntryStatus::Pending | QueueEntryStatus::Claimed) {
+                                        button {
+                                            class: "action-button table-action-button table-action-secondary action-success",
+                                            onclick: move |_| resolve_entry.call(entry.id),
+                                            "Resolve"
                                         }
                                         button {
-                                            class: "action-button",
-                                            onclick: move |_| navigate(route, Route::Admin {
-                                                queue_id: Some(queue_id.to_string()),
-                                                request_id: Some(entry.id.to_string()),
-                                            }),
-                                            "Details"
+                                            class: "action-button table-action-button table-action-secondary action-danger",
+                                            onclick: move |_| deny_entry.call(entry.id),
+                                            "Deny"
                                         }
+                                    }
+                                    if matches!(entry.status, QueueEntryStatus::Resolved | QueueEntryStatus::Denied) {
+                                        button {
+                                            class: "action-button table-action-button table-action-primary",
+                                            onclick: move |_| reopen_entry.call(entry.id),
+                                            "Reopen"
+                                        }
+                                    }
+                                    button {
+                                        class: "action-button table-action-button table-action-secondary",
+                                        onclick: move |_| navigate(route, Route::Admin {
+                                            queue_id: Some(queue_id.to_string()),
+                                            request_id: Some(entry.id.to_string()),
+                                        }),
+                                        "Details"
                                     }
                                 }
                             }
@@ -2942,6 +2945,31 @@ fn handled_by_label(entry: &AdminEntryView) -> String {
         .claimed_by
         .clone()
         .unwrap_or_else(|| "Unassigned".to_string())
+}
+
+fn fixed_columns(widths: &[&str]) -> Vec<String> {
+    widths.iter().map(|width| (*width).to_string()).collect()
+}
+
+fn archive_request_columns(field_count: usize) -> Vec<String> {
+    let mut widths = vec![22.0];
+    widths.extend(std::iter::repeat(16.0).take(field_count));
+    widths.extend([12.0, 18.0, 16.0]);
+    percent_columns(widths)
+}
+
+fn live_request_columns(field_count: usize) -> Vec<String> {
+    let mut widths = vec![17.0];
+    widths.extend(std::iter::repeat(12.0).take(field_count));
+    widths.extend([10.0, 15.0, 12.0, 34.0]);
+    percent_columns(widths)
+}
+
+fn percent_columns(widths: Vec<f64>) -> Vec<String> {
+    widths
+        .into_iter()
+        .map(|width| format!("{width:.3}"))
+        .collect()
 }
 
 fn schedule_mode_for_queue(queue: &QueueSummary) -> String {
