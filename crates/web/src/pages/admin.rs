@@ -890,8 +890,7 @@ fn AdminDashboardPage(
             ConnectionBanner { status: connection_status() }
             header { class: "admin-header",
                 div {
-                    p { class: "kicker", "Admin Workspace" }
-                    h1 { class: "page-title", "Queue Operations" }
+                    h1 { class: "page-title", "Admin Workspace" }
                     p { class: "lede",
                         strong { "{admin_label}" }
                         " • {admin_email}"
@@ -908,14 +907,6 @@ fn AdminDashboardPage(
                         section { class: "sidebar-block",
                             div { class: "panel-header",
                                 h2 { "Overview" }
-                                span { class: "counter-chip", "{state.queues.len()} queues" }
-                            }
-                            p { class: "hint",
-                                if state.admin.is_super_admin {
-                                    "You can see every queue and create accounts for the whole system."
-                                } else {
-                                    "You can manage queues you created."
-                                }
                             }
                             div { class: "detail-list compact-list",
                                 div { class: "detail-row",
@@ -1090,7 +1081,7 @@ fn render_admin_page(
                     p { class: "lede", "Site management is only available to super admins." }
                 }
             },
-            AdminSection::Accounts if state.admin.is_super_admin => rsx! {
+            AdminSection::Accounts => rsx! {
                 AccountsPage {
                     state: state.clone(),
                     account_draft,
@@ -1101,13 +1092,6 @@ fn render_admin_page(
                     delete_account,
                     update_group,
                     delete_group,
-                }
-            },
-            AdminSection::Accounts => rsx! {
-                section { class: "empty-stage",
-                    p { class: "kicker", "Accounts" }
-                    h2 { "Super admin only" }
-                    p { class: "lede", "Account management is only available to super admins." }
                 }
             },
         },
@@ -1205,7 +1189,7 @@ fn AdminNav(
             button {
                 class: nav_button_class(active_section, AdminSection::Queues),
                 onclick: move |_| on_select.call(AdminSection::Queues),
-                "All queues"
+                "Open queues"
             }
             button {
                 class: nav_button_class(active_section, AdminSection::NewQueue),
@@ -1215,7 +1199,7 @@ fn AdminNav(
             button {
                 class: nav_button_class(active_section, AdminSection::ClosedQueues),
                 onclick: move |_| on_select.call(AdminSection::ClosedQueues),
-                "Closed queues"
+                "Queue archive"
             }
             if is_super_admin {
                 button {
@@ -1223,10 +1207,14 @@ fn AdminNav(
                     onclick: move |_| on_select.call(AdminSection::SiteManagement),
                     "Site management"
                 }
-                button {
-                    class: nav_button_class(active_section, AdminSection::Accounts),
-                    onclick: move |_| on_select.call(AdminSection::Accounts),
+            }
+            button {
+                class: nav_button_class(active_section, AdminSection::Accounts),
+                onclick: move |_| on_select.call(AdminSection::Accounts),
+                if is_super_admin {
                     "Account management"
+                } else {
+                    "Share groups"
                 }
             }
         }
@@ -1258,9 +1246,9 @@ fn NewQueuePage(
     rsx! {
         UiPanel { class: "split-view-section create-queue-section".to_string(),
             UiHeader {
-                kicker: "Create Queue".to_string(),
-                title: "New queue".to_string(),
-                lede: Some("Set up the public join form and access mode before sharing a queue link.".to_string()),
+                kicker: "".to_string(),
+                title: "Create queue".to_string(),
+                lede: None,
                 div { class: "create-queue-controls",
                     div { class: "create-queue-switches",
                         UiSwitch {
@@ -1575,9 +1563,7 @@ fn SiteManagementPage(
         section { class: "table-page-section split-view-section",
             div { class: "panel-header",
                 div {
-                    p { class: "kicker", "Site" }
                     h2 { "Site management" }
-                    p { class: "lede", "Manage site-wide settings for admins and queue visitors." }
                 }
             }
             div { class: "site-branding-row",
@@ -1654,24 +1640,31 @@ fn AccountsPage(
     let mut account_modal_open = use_signal(|| false);
     let mut group_modal_open = use_signal(|| false);
     let editing_self = editing_account_id() == Some(state.admin.account_id);
+    let can_manage_accounts = state.admin.is_super_admin;
 
     rsx! {
         section { class: "table-page-section split-view-section",
             div { class: "panel-header",
                 div {
-                    p { class: "kicker", "Accounts" }
-                    h2 { "Account management" }
-                    p { class: "lede", "Create admins, users, or additional super admins. Passwords are stored as hashes." }
+                    h2 {
+                        if can_manage_accounts {
+                            "Account management"
+                        } else {
+                            "Share groups"
+                        }
+                    }
                 }
                 div { class: "button-row",
-                    button {
-                        class: "button button-primary",
-                        onclick: move |_| {
-                            editing_account_id.set(None);
-                            account_draft.set(AccountDraft::default());
-                            account_modal_open.set(true);
-                        },
-                        "New account"
+                    if can_manage_accounts {
+                        button {
+                            class: "button button-primary",
+                            onclick: move |_| {
+                                editing_account_id.set(None);
+                                account_draft.set(AccountDraft::default());
+                                account_modal_open.set(true);
+                            },
+                            "New account"
+                        }
                     }
                     button {
                         class: "button button-secondary",
@@ -1688,7 +1681,6 @@ fn AccountsPage(
                 section { class: "account-list-panel",
                     div { class: "account-section-header",
                         div {
-                            p { class: "kicker", "People" }
                             h3 { "Accounts" }
                         }
                         div { class: "account-role-summary",
@@ -1714,25 +1706,36 @@ fn AccountsPage(
                                     }
                                     div { class: "account-card-side",
                                         span { class: "role-pill {role_class(&account.role)}", "{role_label(&account.role)}" }
-                                        div { class: "table-actions",
-                                            button {
-                                                class: "action-button",
-                                                onclick: move |_| {
-                                                    editing_account_id.set(Some(account.id));
-                                                    account_draft.set(AccountDraft {
-                                                        name: account.name.clone(),
-                                                        email: account.email.clone(),
-                                                        password: String::new(),
-                                                        role: account.role.clone(),
-                                                    });
-                                                    account_modal_open.set(true);
-                                                },
-                                                "Edit"
-                                            }
-                                            button {
-                                                class: "action-button action-danger",
-                                                onclick: move |_| delete_account.call(account.id),
-                                                "Delete"
+                                        if can_manage_accounts {
+                                            div { class: "table-actions",
+                                                button {
+                                                    class: "action-button",
+                                                    onclick: {
+                                                        let account_id = account.id;
+                                                        let account_name = account.name.clone();
+                                                        let account_email = account.email.clone();
+                                                        let account_role = account.role.clone();
+                                                        move |_| {
+                                                            editing_account_id.set(Some(account_id));
+                                                            account_draft.set(AccountDraft {
+                                                                name: account_name.clone(),
+                                                                email: account_email.clone(),
+                                                                password: String::new(),
+                                                                role: account_role.clone(),
+                                                            });
+                                                            account_modal_open.set(true);
+                                                        }
+                                                    },
+                                                    "Edit"
+                                                }
+                                                button {
+                                                    class: "action-button action-danger",
+                                                    onclick: {
+                                                        let account_id = account.id;
+                                                        move |_| delete_account.call(account_id)
+                                                    },
+                                                    "Delete"
+                                                }
                                             }
                                         }
                                     }
@@ -1744,7 +1747,6 @@ fn AccountsPage(
                 section { class: "account-list-panel",
                     div { class: "account-section-header",
                         div {
-                            p { class: "kicker", "Access Sets" }
                             h3 { "Groups" }
                         }
                         span { class: "account-role-chip", "{state.groups.len()} groups" }
@@ -1791,7 +1793,7 @@ fn AccountsPage(
                     }
                 }
             }
-            if account_modal_open() {
+            if can_manage_accounts && account_modal_open() {
                 div { class: "modal-backdrop",
                     div { class: "modal-panel form-stack",
                         div { class: "panel-header",
@@ -1992,6 +1994,7 @@ fn AccountsPage(
                             label { class: "label", "Group type" }
                             select {
                                 class: "input",
+                                disabled: !can_manage_accounts,
                                 value: "{role_value(&group_draft().role)}",
                                 onchange: move |event| {
                                     let mut next = group_draft();
@@ -2003,7 +2006,9 @@ fn AccountsPage(
                                     group_draft.set(next);
                                 },
                                 option { value: "admin", "Admin group" }
-                                option { value: "user", "User group" }
+                                if can_manage_accounts {
+                                    option { value: "user", "User group" }
+                                }
                             }
                         }
                         div { class: "checkbox-list modal-member-list",
@@ -2066,12 +2071,10 @@ fn QueueIndexPage(route: Signal<Route>, state: AdminStateView) -> Element {
         section { class: "table-page-section",
             div { class: "panel-header",
                 div {
-                    p { class: "kicker", "Queues" }
-                    h2 { "All queues" }
+                    h2 { "Open queues" }
                 }
                 span { class: "counter-chip", "{state.queues.len()}" }
             }
-            p { class: "lede", "Each queue has its own page of requests. Open one to work request-by-request." }
             if state.queues.is_empty() {
                 div { class: "empty-panel",
                     p { "No queues yet. Open Create queue from the admin navigation." }
@@ -2138,11 +2141,9 @@ fn ClosedQueueIndexPage(state: AdminStateView) -> Element {
         section { class: "table-page-section",
             div { class: "panel-header",
                 div {
-                    p { class: "kicker", "Archive" }
-                    h2 { "Closed queues" }
-                    p { class: "lede", "Closed queues are removed from active lists but retain their saved request information here." }
+                    h2 { "Queue archive" }
                 }
-                span { class: "counter-chip", "{state.archived_queues.len()} closed" }
+                span { class: "counter-chip", "{state.archived_queues.len()}" }
             }
             if state.archived_queues.is_empty() {
                 div { class: "empty-panel",

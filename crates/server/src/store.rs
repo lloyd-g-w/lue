@@ -431,8 +431,11 @@ impl Store {
         let admin = self
             .admin_account(admin_token)
             .ok_or_else(|| "unknown admin session".to_string())?;
-        if !admin.is_super_admin() {
-            return Err("only the super admin can create groups".to_string());
+        if !admin.can_administer() {
+            return Err("only admins can create groups".to_string());
+        }
+        if !admin.is_super_admin() && role != AccountRole::Admin {
+            return Err("only the super admin can create user groups".to_string());
         }
         if role == AccountRole::SuperAdmin {
             return Err("groups can only be created for admins or users".to_string());
@@ -468,8 +471,17 @@ impl Store {
         let admin = self
             .admin_account(admin_token)
             .ok_or_else(|| "unknown admin session".to_string())?;
+        if !admin.can_administer() {
+            return Err("only admins can edit groups".to_string());
+        }
         if !admin.is_super_admin() {
-            return Err("only the super admin can edit groups".to_string());
+            let group = self
+                .groups
+                .get(&group_id)
+                .ok_or_else(|| "group not found".to_string())?;
+            if group.role != AccountRole::Admin || role != AccountRole::Admin {
+                return Err("only the super admin can edit user groups".to_string());
+            }
         }
         if role == AccountRole::SuperAdmin {
             return Err("groups can only be created for admins or users".to_string());
@@ -494,8 +506,17 @@ impl Store {
         let admin = self
             .admin_account(admin_token)
             .ok_or_else(|| "unknown admin session".to_string())?;
+        if !admin.can_administer() {
+            return Err("only admins can delete groups".to_string());
+        }
         if !admin.is_super_admin() {
-            return Err("only the super admin can delete groups".to_string());
+            let group = self
+                .groups
+                .get(&group_id)
+                .ok_or_else(|| "group not found".to_string())?;
+            if group.role != AccountRole::Admin {
+                return Err("only the super admin can delete user groups".to_string());
+            }
         }
         self.groups
             .remove(&group_id)
@@ -546,14 +567,12 @@ impl Store {
         let admin = self
             .admin_account(admin_token)
             .ok_or_else(|| "unknown admin session".to_string())?;
-        if !admin.is_super_admin() {
-            let queue = self
-                .queues
-                .get(&queue_id)
-                .ok_or_else(|| "queue not found".to_string())?;
-            if queue.owner_account_id != admin.id {
-                return Err("only the queue owner or super admin can share this queue".to_string());
-            }
+        let queue = self
+            .queues
+            .get(&queue_id)
+            .ok_or_else(|| "queue not found".to_string())?;
+        if !self.account_can_manage_queue(admin.id, queue) {
+            return Err("you do not have access to this queue".to_string());
         }
 
         let shared_account_ids = self.validated_share_accounts(account_ids)?;
@@ -621,8 +640,10 @@ impl Store {
 
         let fallback_queue_id = queues.first().map(|queue| queue.summary.id);
         let selected_queue = selected_queue_id
-            .or(fallback_queue_id)
-            .and_then(|queue_id| self.admin_queue_view(admin_token, queue_id));
+            .and_then(|queue_id| self.admin_queue_view(admin_token, queue_id))
+            .or_else(|| {
+                fallback_queue_id.and_then(|queue_id| self.admin_queue_view(admin_token, queue_id))
+            });
         let mut archived_queues: Vec<ArchivedQueueListItem> = self
             .archived_queues
             .values()
@@ -653,39 +674,31 @@ impl Store {
             .collect();
         archived_queues.sort_by(|left, right| right.closed_at.cmp(&left.closed_at));
 
-        let accounts = if admin.is_super_admin {
-            let mut accounts: Vec<AccountView> = self
-                .accounts
-                .values()
-                .map(|account| AccountView {
-                    id: account.id,
-                    name: account.name.clone(),
-                    email: account.email.clone(),
-                    role: account.role.clone(),
-                })
-                .collect();
-            accounts.sort_by(|left, right| left.email.cmp(&right.email));
-            accounts
-        } else {
-            Vec::new()
-        };
+        let mut accounts: Vec<AccountView> = self
+            .accounts
+            .values()
+            .filter(|account| admin.is_super_admin || account.can_administer())
+            .map(|account| AccountView {
+                id: account.id,
+                name: account.name.clone(),
+                email: account.email.clone(),
+                role: account.role.clone(),
+            })
+            .collect();
+        accounts.sort_by(|left, right| left.email.cmp(&right.email));
 
-        let groups = if admin.is_super_admin {
-            let mut groups: Vec<GroupView> = self
-                .groups
-                .values()
-                .map(|group| GroupView {
-                    id: group.id,
-                    name: group.name.clone(),
-                    role: group.role.clone(),
-                    member_ids: group.member_ids.clone(),
-                })
-                .collect();
-            groups.sort_by(|left, right| left.name.cmp(&right.name));
-            groups
-        } else {
-            Vec::new()
-        };
+        let mut groups: Vec<GroupView> = self
+            .groups
+            .values()
+            .filter(|group| admin.is_super_admin || group.role == AccountRole::Admin)
+            .map(|group| GroupView {
+                id: group.id,
+                name: group.name.clone(),
+                role: group.role.clone(),
+                member_ids: group.member_ids.clone(),
+            })
+            .collect();
+        groups.sort_by(|left, right| left.name.cmp(&right.name));
 
         Some(AdminStateView {
             admin,
@@ -1853,7 +1866,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_admins_can_manage_requests_but_not_share_access() {
+    fn shared_admins_can_manage_requests_and_share_access() {
         let mut store = Store::default();
         store
             .bootstrap_super_admin(
@@ -1877,6 +1890,15 @@ mod tests {
         store
             .create_account(
                 &super_admin.token,
+                "Other".to_string(),
+                "other@example.com".to_string(),
+                "other-pass".to_string(),
+                AccountRole::Admin,
+            )
+            .expect("create other admin");
+        store
+            .create_account(
+                &super_admin.token,
                 "Shared".to_string(),
                 "shared@example.com".to_string(),
                 "shared-pass".to_string(),
@@ -1889,7 +1911,11 @@ mod tests {
         let shared = store
             .login_admin("shared@example.com".to_string(), "shared-pass".to_string())
             .expect("login shared");
+        let other = store
+            .login_admin("other@example.com".to_string(), "other-pass".to_string())
+            .expect("login other");
         let shared_account_id = store.account_email_index["shared@example.com"];
+        let other_account_id = store.account_email_index["other@example.com"];
         let queue_id = store
             .create_queue(
                 &owner.token,
@@ -1923,8 +1949,114 @@ mod tests {
             store.queues[&queue_id].entries[0].status,
             QueueEntryStatus::Resolved
         );
+        store
+            .share_queue(
+                &shared.token,
+                queue_id,
+                vec![shared_account_id, other_account_id],
+                Vec::new(),
+            )
+            .expect("shared admin updates sharing");
+        assert!(store.admin_can_see_queue(&other.token, queue_id));
+    }
+
+    #[test]
+    fn shared_admins_can_create_admin_share_groups() {
+        let mut store = Store::default();
+        store
+            .bootstrap_super_admin(
+                "Super Admin".to_string(),
+                "super@example.com".to_string(),
+                "super-pass".to_string(),
+            )
+            .expect("bootstrap super admin");
+        let super_admin = store
+            .login_admin("super@example.com".to_string(), "super-pass".to_string())
+            .expect("login super admin");
+        store
+            .create_account(
+                &super_admin.token,
+                "Owner".to_string(),
+                "owner@example.com".to_string(),
+                "owner-pass".to_string(),
+                AccountRole::Admin,
+            )
+            .expect("create owner");
+        store
+            .create_account(
+                &super_admin.token,
+                "Shared".to_string(),
+                "shared@example.com".to_string(),
+                "shared-pass".to_string(),
+                AccountRole::Admin,
+            )
+            .expect("create shared admin");
+        store
+            .create_account(
+                &super_admin.token,
+                "Other".to_string(),
+                "other@example.com".to_string(),
+                "other-pass".to_string(),
+                AccountRole::Admin,
+            )
+            .expect("create other admin");
+        let owner = store
+            .login_admin("owner@example.com".to_string(), "owner-pass".to_string())
+            .expect("login owner");
+        let shared = store
+            .login_admin("shared@example.com".to_string(), "shared-pass".to_string())
+            .expect("login shared");
+        let other = store
+            .login_admin("other@example.com".to_string(), "other-pass".to_string())
+            .expect("login other");
+        let shared_account_id = store.account_email_index["shared@example.com"];
+        let other_account_id = store.account_email_index["other@example.com"];
+        let queue_id = store
+            .create_queue(
+                &owner.token,
+                "Support".to_string(),
+                Vec::new(),
+                true,
+                false,
+                None,
+                None,
+            )
+            .expect("create queue");
+        store
+            .share_queue(&owner.token, queue_id, vec![shared_account_id], Vec::new())
+            .expect("owner shares queue");
+
+        store
+            .create_group(
+                &shared.token,
+                "Shift leads".to_string(),
+                AccountRole::Admin,
+                vec![other_account_id],
+            )
+            .expect("shared admin creates admin group");
+        let group_id = store
+            .groups
+            .values()
+            .find(|group| group.name == "Shift leads")
+            .map(|group| group.id)
+            .expect("group id");
+        store
+            .share_queue(
+                &shared.token,
+                queue_id,
+                vec![shared_account_id],
+                vec![group_id],
+            )
+            .expect("shared admin shares with group");
+        assert!(store.admin_can_see_queue(&other.token, queue_id));
+
         assert!(store
-            .share_queue(&shared.token, queue_id, Vec::new(), Vec::new())
+            .create_group(
+                &shared.token,
+                "Guests".to_string(),
+                AccountRole::User,
+                Vec::new(),
+            )
             .is_err());
     }
 
