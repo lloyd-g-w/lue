@@ -1,6 +1,6 @@
-# Live Queue With Rust, Dioxus, and WebSockets
+# Live Queue Manager
 
-This repository contains a small full-stack queue system:
+This repository contains a small full-stack queue manager:
 
 - `crates/server`: Axum WebSocket server with an in-memory queue store
 - `crates/web`: Dioxus web frontend for admins and users
